@@ -38,12 +38,31 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       child: Row(children: [
+        // ── Back button ─────────────────────────────────────────────────
+        Tooltip(
+          message: 'Back to Home',
+          child: InkWell(
+            onTap: () => Navigator.of(context).maybePop(),
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              width: 30, height: 30,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: const Icon(Icons.arrow_back, color: AppColors.textPrimary, size: 16),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+
         // Icon + short title
-        const Icon(Icons.hub, color: AppColors.accent, size: 18),
+        const Icon(Icons.psychology, color: AppColors.accent, size: 18),
         const SizedBox(width: 6),
         Flexible(
           flex: 2,
-          child: Text('TeleRehab Monitor',
+          child: Text('Multimodal Telerehab Monitor',
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.inter(
                 color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600,

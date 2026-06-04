@@ -111,6 +111,7 @@ class MetricTile extends StatelessWidget {
   final String value;
   final String? target;
   final Color valueColor;
+  final bool showCheck;
 
   const MetricTile({
     super.key,
@@ -118,6 +119,7 @@ class MetricTile extends StatelessWidget {
     required this.value,
     this.target,
     this.valueColor = AppColors.textPrimary,
+    this.showCheck = false,
   });
 
   @override
@@ -133,9 +135,15 @@ class MetricTile extends StatelessWidget {
           color: valueColor, fontSize: 20, fontWeight: FontWeight.w700,
         )),
         if (target != null)
-          Text(target!, style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 9,
-          )),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(target!, style: GoogleFonts.inter(
+              color: AppColors.textSecondary, fontSize: 9,
+            )),
+            if (showCheck) ...[
+              const SizedBox(width: 3),
+              const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 10),
+            ],
+          ]),
       ],
     );
   }

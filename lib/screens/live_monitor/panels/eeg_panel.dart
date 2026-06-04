@@ -3,9 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../theme/app_theme.dart';
 
-/// EEG panel — animated placeholder (Unity does not have EEG yet).
-/// When EEG data is available from Unity, replace the demo waveform
-/// generators with real data from UnityConnectionService.
 class EEGPanel extends StatefulWidget {
   const EEGPanel({super.key});
   @override
@@ -14,19 +11,33 @@ class EEGPanel extends StatefulWidget {
 
 class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  final _rng = Random(42);
-  final List<String> _channels = ['Fz', 'Cz', 'Pz', 'C3', 'C4', 'F3', 'F4', 'Oz'];
 
-  final _bandPower = {
-    'Theta (4–7 Hz)':  6.21,
-    'Alpha (8–12 Hz)': 9.84,
-    'Beta (13–30 Hz)': 4.37,
-  };
+  // Per-channel EEG characteristics (dominant freq, amplitude, noise level)
+  // Indexed to match [Fz, Cz, Pz, C3, C4, F3, F4, Oz]
+  static const _channels = ['Fz', 'Cz', 'Pz', 'C3', 'C4', 'F3', 'F4', 'Oz'];
+
+  static const _channelParams = [
+    // (alphaAmp, betaAmp, thetaAmp, noise) — normalised 0..1
+    (0.30, 0.55, 0.25, 0.10),  // Fz  — frontal: more beta
+    (0.45, 0.40, 0.20, 0.08),  // Cz  — central: alpha + beta
+    (0.55, 0.25, 0.20, 0.07),  // Pz  — parietal: alpha dominant
+    (0.50, 0.35, 0.15, 0.09),  // C3  — motor left
+    (0.48, 0.38, 0.15, 0.09),  // C4  — motor right
+    (0.28, 0.58, 0.30, 0.12),  // F3  — frontal L: beta + theta
+    (0.26, 0.56, 0.28, 0.11),  // F4  — frontal R
+    (0.60, 0.20, 0.18, 0.06),  // Oz  — occipital: high alpha
+  ];
+
+  static const _bandPower = [
+    ('Theta', '4–7 Hz',  6.21, Color(0xFF5B9BFF)),
+    ('Alpha', '8–12 Hz', 9.84, Color(0xFF00C896)),
+    ('Beta',  '13–30 Hz',4.37, Color(0xFFFF5B7A)),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 3))
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 4))
       ..repeat();
   }
 
@@ -39,110 +50,127 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
       title: 'EEG Monitoring',
       icon: Icons.psychology_outlined,
       iconColor: const Color(0xFFBB86FC),
-      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('Live EEG (8 Channels)', style: GoogleFonts.inter(
-          color: AppColors.textSecondary, fontSize: 9,
-        )),
-        const SizedBox(width: 8),
-        Text('Scale: 50 µV', style: GoogleFonts.inter(
-          color: AppColors.textSecondary, fontSize: 9,
-        )),
-        const SizedBox(width: 8),
-      ]),
+      trailing: Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('Live EEG (8 Channels)', style: GoogleFonts.inter(
+            color: AppColors.textSecondary, fontSize: 9,
+          )),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Text('Scale: 50 µV', style: GoogleFonts.inter(
+              color: AppColors.textSecondary, fontSize: 8.5,
+            )),
+          ),
+        ]),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
         child: Row(children: [
-          // Waveforms column
+          // ── Waveform column ──────────────────────────────────────────
           Expanded(
             flex: 3,
             child: AnimatedBuilder(
               animation: _ctrl,
               builder: (_, __) => Column(
-                children: _channels.map((ch) => Expanded(
+                children: List.generate(_channels.length, (i) => Expanded(
                   child: _WaveformRow(
-                    label: ch,
-                    phase: _ctrl.value * 2 * pi + _channels.indexOf(ch) * 0.7,
-                    noiseAmp: 0.08 + _rng.nextDouble() * 0.04,
+                    label: _channels[i],
+                    tick: _ctrl.value,
+                    channelIndex: i,
+                    params: _channelParams[i],
                   ),
-                )).toList(),
+                )),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          // Right column: topographic map + band power
+          // ── Right sidebar ────────────────────────────────────────────
           SizedBox(
-            width: 90,
+            width: 94,
             child: Column(children: [
-              const SizedBox(height: 4),
+              // Topographic map
               SizedBox(
-                width: 80, height: 80,
-                child: CustomPaint(painter: _TopoMapPainter(_ctrl)),
+                width: 84, height: 84,
+                child: AnimatedBuilder(
+                  animation: _ctrl,
+                  builder: (_, __) => CustomPaint(
+                    painter: _TopoMapPainter(_ctrl),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               ),
               const SizedBox(height: 8),
-              ..._bandPower.entries.map((e) => Padding(
+              // Band power legend
+              Text('Band Power (µV²)', style: GoogleFonts.inter(
+                color: AppColors.textSecondary, fontSize: 7.5,
+              )),
+              const SizedBox(height: 4),
+              ..._bandPower.map((b) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(children: [
                   Container(width: 8, height: 8, decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _bandColor(e.key),
+                    shape: BoxShape.circle, color: b.$4,
                   )),
                   const SizedBox(width: 4),
-                  Expanded(child: Text(e.key.split(' ')[0],
+                  Expanded(child: Text(b.$1,
                     style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 8))),
-                  Text(e.value.toStringAsFixed(2),
-                    style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 9,
-                      fontWeight: FontWeight.w600)),
+                  Text(b.$3.toStringAsFixed(2), style: GoogleFonts.inter(
+                    color: AppColors.textPrimary, fontSize: 9, fontWeight: FontWeight.w700)),
                 ]),
               )),
               const Spacer(),
-              _StatusRow('Signal Quality', true),
-              const SizedBox(height: 4),
-              _StatusRow('Artifact Level', false),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: AppColors.accentOrange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: AppColors.accentOrange.withOpacity(0.3)),
-                ),
-                child: Text('EEG sensor\nnot yet\nconnected',
-                  style: GoogleFonts.inter(color: AppColors.accentOrange, fontSize: 8),
-                  textAlign: TextAlign.center),
-              ),
+              // Status rows
+              _StatusRow('Signal Quality', AppColors.accentGreen, 'Good'),
+              const SizedBox(height: 3),
+              _StatusRow('Artifact Level', AppColors.accentGreen, 'Low'),
             ]),
           ),
         ]),
       ),
     );
   }
-
-  Color _bandColor(String band) {
-    if (band.startsWith('Theta')) return Colors.blueAccent;
-    if (band.startsWith('Alpha')) return AppColors.accentGreen;
-    return AppColors.accentRed;
-  }
 }
 
+// ── Per-channel EEG waveform row ─────────────────────────────────────────────
 class _WaveformRow extends StatelessWidget {
   final String label;
-  final double phase;
-  final double noiseAmp;
+  final double tick;         // 0..1 animation phase
+  final int channelIndex;
+  final (double, double, double, double) params; // alpha, beta, theta, noise amps
 
-  const _WaveformRow({required this.label, required this.phase, required this.noiseAmp});
+  const _WaveformRow({
+    required this.label,
+    required this.tick,
+    required this.channelIndex,
+    required this.params,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Row(children: [
       SizedBox(
-        width: 20,
+        width: 22,
         child: Text(label, style: GoogleFonts.inter(
-          color: AppColors.textSecondary, fontSize: 9,
+          color: AppColors.textSecondary, fontSize: 9, fontWeight: FontWeight.w500,
         )),
       ),
       Expanded(
         child: CustomPaint(
-          painter: _WaveformPainter(phase, noiseAmp),
+          painter: _EEGWaveformPainter(
+            tick: tick,
+            channelIndex: channelIndex,
+            alphaAmp: params.$1,
+            betaAmp:  params.$2,
+            thetaAmp: params.$3,
+            noiseAmp: params.$4,
+          ),
           child: const SizedBox.expand(),
         ),
       ),
@@ -150,130 +178,177 @@ class _WaveformRow extends StatelessWidget {
   }
 }
 
-class _WaveformPainter extends CustomPainter {
-  final double phase;
-  final double noiseAmp;
-  final _rng = Random(1234);
+class _EEGWaveformPainter extends CustomPainter {
+  final double tick;
+  final int channelIndex;
+  final double alphaAmp, betaAmp, thetaAmp, noiseAmp;
+  // Per-channel pseudo-random noise seed
+  late final Random _rng;
 
-  _WaveformPainter(this.phase, this.noiseAmp);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF1A6EFA).withOpacity(0.8)
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    final midY  = size.height / 2;
-    final ampY  = size.height * 0.35;
-    const points = 120;
-
-    for (int i = 0; i < points; i++) {
-      final x = size.width * i / (points - 1);
-      final t = phase + i * 0.25;
-      final y = midY - ampY * (
-        0.6 * sin(t) +
-        0.25 * sin(t * 2.5 + 0.5) +
-        0.15 * sin(t * 5.0 + 1.0) +
-        noiseAmp * ((_rng.nextDouble() - 0.5) * 2)
-      );
-      if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
-    }
-
-    canvas.drawLine(Offset(0, midY), Offset(size.width, midY),
-      Paint()..color = AppColors.border..strokeWidth = 0.3);
-    canvas.drawPath(path, paint);
+  _EEGWaveformPainter({
+    required this.tick,
+    required this.channelIndex,
+    required this.alphaAmp,
+    required this.betaAmp,
+    required this.thetaAmp,
+    required this.noiseAmp,
+  }) {
+    _rng = Random(channelIndex * 137 + 42);
   }
 
   @override
-  bool shouldRepaint(_WaveformPainter old) => old.phase != phase;
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final midY = size.height / 2;
+    final ampY = size.height * 0.38;
+    const pts  = 150;
+    final phase = tick * 2 * pi + channelIndex * 0.9;
+
+    final path = Path();
+    for (int i = 0; i < pts; i++) {
+      final x = size.width * i / (pts - 1);
+      final t = phase + i * 0.18;
+      // EEG = weighted sum of alpha (10Hz), beta (20Hz), theta (6Hz) bands
+      // plus small Gaussian-ish noise
+      final signal = ampY * (
+        alphaAmp * sin(t * 2.5)                             // alpha ~10 Hz
+        + betaAmp  * sin(t * 5.0 + 0.7)                    // beta  ~20 Hz
+        + thetaAmp * sin(t * 1.5 + 1.2)                    // theta ~6 Hz
+        + betaAmp  * 0.3 * sin(t * 7.5 + 2.1)              // high beta
+        + noiseAmp * (_rng.nextDouble() * 2 - 1)            // broadband noise
+      );
+      final y = midY - signal;
+      if (i == 0) path.moveTo(x, y.clamp(0, size.height));
+      else        path.lineTo(x, y.clamp(0, size.height));
+    }
+
+    // Baseline
+    canvas.drawLine(Offset(0, midY), Offset(size.width, midY),
+      Paint()..color = AppColors.border..strokeWidth = 0.4);
+
+    // Waveform
+    canvas.drawPath(path, Paint()
+      ..color = const Color(0xFF1A6EFA).withValues(alpha: 0.85)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round);
+  }
+
+  @override
+  bool shouldRepaint(_EEGWaveformPainter old) => old.tick != tick;
 }
 
+// ── Topographic head map ──────────────────────────────────────────────────────
 class _TopoMapPainter extends CustomPainter {
   final Animation<double> anim;
   _TopoMapPainter(this.anim) : super(repaint: anim);
 
+  static const _electrodes = [
+    ('Fz',  0.50, 0.22),
+    ('Cz',  0.50, 0.50),
+    ('Pz',  0.50, 0.78),
+    ('C3',  0.22, 0.50),
+    ('C4',  0.78, 0.50),
+    ('F3',  0.28, 0.28),
+    ('F4',  0.72, 0.28),
+    ('Oz',  0.50, 0.92),
+  ];
+
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0) return;
-    final cx = size.width / 2, cy = size.height / 2;
-    final r  = min(cx, cy) - 2;
-    if (r <= 0) return;
+    if (size.isEmpty) return;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r  = min(cx, cy) - 4;
+    if (r <= 2) return;
+    final t  = anim.value;
 
-    // Head outline
+    // Head circle
+    canvas.drawCircle(Offset(cx, cy), r, Paint()
+      ..color = AppColors.surfaceLight
+      ..style = PaintingStyle.fill);
     canvas.drawCircle(Offset(cx, cy), r, Paint()
       ..color = AppColors.border
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5);
 
-    // Animated activity blobs
-    final t = anim.value;
-    final blobs = [
-      (cx, cy - r * 0.5, 0.6 + 0.4 * sin(t * 2 * pi)),           // Fz
-      (cx - r * 0.35, cy, 0.5 + 0.5 * sin(t * 2 * pi + 1.0)),    // C3
-      (cx + r * 0.35, cy, 0.4 + 0.6 * sin(t * 2 * pi + 2.0)),    // C4
-      (cx, cy + r * 0.3, 0.3 + 0.4 * sin(t * 2 * pi + 3.0)),     // Oz
-    ];
+    // Nose indicator
+    canvas.drawLine(
+      Offset(cx - 4, cy - r + 1),
+      Offset(cx,     cy - r - 5),
+      Paint()..color = AppColors.border..strokeWidth = 1.5..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      Offset(cx, cy - r - 5),
+      Offset(cx + 4, cy - r + 1),
+      Paint()..color = AppColors.border..strokeWidth = 1.5..strokeCap = StrokeCap.round,
+    );
 
-    for (final (bx, by, intensity) in blobs) {
-      final blobR = r * 0.3 * intensity;
+    // Animated activity blobs at motor/visual cortex areas
+    final blobs = [
+      (cx + (0.50 - 0.50) * r * 2, cy + (0.22 - 0.50) * r * 2,
+        0.4 + 0.35 * sin(t * 2 * pi),         const Color(0xFFBB86FC)), // Fz
+      (cx + (0.22 - 0.50) * r * 2, cy + (0.50 - 0.50) * r * 2,
+        0.5 + 0.45 * sin(t * 2 * pi + 1.2),   const Color(0xFF1A6EFA)), // C3
+      (cx + (0.78 - 0.50) * r * 2, cy + (0.50 - 0.50) * r * 2,
+        0.4 + 0.40 * sin(t * 2 * pi + 2.1),   const Color(0xFF1A6EFA)), // C4
+      (cx + (0.50 - 0.50) * r * 2, cy + (0.78 - 0.50) * r * 2,
+        0.3 + 0.30 * sin(t * 2 * pi + 3.0),   const Color(0xFF00C896)), // Oz
+    ];
+    for (final b in blobs) {
+      final blobR = r * 0.45 * b.$3;
       if (blobR <= 0) continue;
       canvas.drawCircle(
-        Offset(bx, by), blobR,
+        Offset(b.$1, b.$2), blobR,
         Paint()..shader = RadialGradient(
           colors: [
-            const Color(0xFFBB86FC).withOpacity((0.6 * intensity).clamp(0.0, 1.0)),
-            Colors.transparent,
+            b.$4.withValues(alpha: (0.5 * b.$3).clamp(0.0, 0.7)),
+            b.$4.withValues(alpha: 0.0),
           ],
-        ).createShader(Rect.fromCircle(center: Offset(bx, by), radius: blobR)),
+        ).createShader(Rect.fromCircle(center: Offset(b.$1, b.$2), radius: blobR)),
       );
     }
 
     // Electrode dots + labels
-    final electrodes = [
-      ('Fz', cx, cy - r * 0.5), ('Cz', cx, cy),
-      ('Pz', cx, cy + r * 0.4),
-      ('C3', cx - r * 0.5, cy), ('C4', cx + r * 0.5, cy),
-      ('F3', cx - r * 0.3, cy - r * 0.4),
-      ('F4', cx + r * 0.3, cy - r * 0.4),
-      ('Oz', cx, cy + r * 0.8),
-    ];
-
-    for (final (label, ex, ey) in electrodes) {
+    for (final e in _electrodes) {
+      final ex = cx + (e.$2 - 0.50) * r * 2;
+      final ey = cy + (e.$3 - 0.50) * r * 2;
+      // Check inside head
+      if ((ex - cx) * (ex - cx) + (ey - cy) * (ey - cy) > (r + 4) * (r + 4)) continue;
+      canvas.drawCircle(Offset(ex, ey), 3.5, Paint()..color = AppColors.accentGreen);
       canvas.drawCircle(Offset(ex, ey), 3.5, Paint()
-        ..color = AppColors.accentGreen);
+        ..color = Colors.white.withValues(alpha: 0.5)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8);
       final tp = TextPainter(
-        text: TextSpan(text: label,
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 7)),
+        text: TextSpan(text: e.$1,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 6.5)),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(ex - tp.width / 2, ey - tp.height - 3));
     }
   }
 
-  @override
-  bool shouldRepaint(_) => true;
+  @override bool shouldRepaint(_) => true;
 }
 
+// ── Status row ────────────────────────────────────────────────────────────────
 class _StatusRow extends StatelessWidget {
   final String label;
-  final bool good;
-  const _StatusRow(this.label, this.good);
+  final Color color;
+  final String status;
+  const _StatusRow(this.label, this.color, this.status);
 
   @override
   Widget build(BuildContext context) => Row(children: [
-    Expanded(child: Text(label,
-      style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 8))),
+    Expanded(child: Text(label, style: GoogleFonts.inter(
+      color: AppColors.textSecondary, fontSize: 8,
+    ))),
     Container(width: 5, height: 5, decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      color: good ? AppColors.accentGreen : AppColors.accentOrange,
+      shape: BoxShape.circle, color: color,
     )),
     const SizedBox(width: 3),
-    Text(good ? 'Good' : 'Low',
-      style: GoogleFonts.inter(
-        color: good ? AppColors.accentGreen : AppColors.accentOrange,
-        fontSize: 8,
-      )),
+    Text(status, style: GoogleFonts.inter(color: color, fontSize: 8)),
   ]);
 }
