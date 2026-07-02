@@ -76,10 +76,10 @@ class _VideoStreamWidgetState extends State<VideoStreamWidget> {
               margin: const EdgeInsets.only(right: 4),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _frame != null ? AppColors.accentGreen : AppColors.textSecondary,
+                color: _frame != null ? AppColors.accentGreen : AppColors.inkMuted,
               ),
             ),
-            Text(widget.label, style: GoogleFonts.inter(
+            Text(widget.label, style: GoogleFonts.schibstedGrotesk(
               color: Colors.white, fontSize: 9, fontWeight: FontWeight.w500,
             )),
           ]),
@@ -101,28 +101,28 @@ class _Placeholder extends StatelessWidget {
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         if (hasError) ...[
           const Icon(Icons.videocam_off_outlined,
-              color: AppColors.textSecondary, size: 28),
+              color: AppColors.inkMuted, size: 28),
           const SizedBox(height: 8),
-          Text('No signal', style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 11,
+          Text('No signal', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 11,
           )),
-          Text('Start Unity to see video', style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 9,
+          Text('Start Unity to see video', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 9,
           )),
         ] else ...[
           const SizedBox(
             width: 24, height: 24,
             child: CircularProgressIndicator(
-              strokeWidth: 2, color: AppColors.textSecondary,
+              strokeWidth: 2, color: AppColors.inkMuted,
             ),
           ),
           const SizedBox(height: 8),
-          Text('Connecting to $label…', style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 10,
+          Text('Connecting to $label…', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 10,
           )),
         ],
       ]),
     ).animate(onPlay: (c) => c.repeat())
-     .shimmer(duration: 2.seconds, color: AppColors.border.withOpacity(0.3));
+     .shimmer(duration: 2.seconds, color: AppColors.inkBorder.withOpacity(0.3));
   }
 }

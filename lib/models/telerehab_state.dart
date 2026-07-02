@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:ui';
+import 'skeleton_3d.dart';
 
 class SessionInfo {
   final String participantId;
@@ -69,18 +71,63 @@ class JointAngleData {
       angle >= targetMin! && angle <= targetMax!;
 }
 
+/// The four physical FSR regions the real insole measures, each normalised 0..1.
+/// Mirrors Unity's [FSRState]: Toe, Middle_Inner (medial), Middle_Outer (lateral), Heel.
+class FootZones {
+  final double toe;
+  final double midInner;
+  final double midOuter;
+  final double heel;
+
+  const FootZones({
+    this.toe = 0,
+    this.midInner = 0,
+    this.midOuter = 0,
+    this.heel = 0,
+  });
+
+  double get sum => toe + midInner + midOuter + heel;
+  double get forefoot => (toe + midInner + midOuter) / 3;
+
+  /// Center of pressure within the foot, in normalised foot coordinates
+  /// (x: 0 = medial … 1 = lateral, y: 0 = toe … 1 = heel). Returns the
+  /// geometric centre when there is no load.
+  Offset get cop {
+    final total = sum;
+    if (total <= 0) return const Offset(0.5, 0.5);
+    // Approx zone centres (x medial→lateral, y toe→heel) for a generic insole.
+    const pToe = Offset(0.50, 0.12);
+    const pInner = Offset(0.32, 0.48);
+    const pOuter = Offset(0.68, 0.48);
+    const pHeel = Offset(0.50, 0.86);
+    final x = (pToe.dx * toe + pInner.dx * midInner + pOuter.dx * midOuter + pHeel.dx * heel) / total;
+    final y = (pToe.dy * toe + pInner.dy * midInner + pOuter.dy * midOuter + pHeel.dy * heel) / total;
+    return Offset(x, y);
+  }
+
+  factory FootZones.fromJson(Map<String, dynamic>? j) {
+    if (j == null) return const FootZones();
+    return FootZones(
+      toe:      (j['toe']      ?? 0.0).toDouble(),
+      midInner: (j['midInner'] ?? 0.0).toDouble(),
+      midOuter: (j['midOuter'] ?? 0.0).toDouble(),
+      heel:     (j['heel']     ?? 0.0).toDouble(),
+    );
+  }
+}
+
 class PlantarData {
-  final List<double> leftFoot;   // 16 sensor values 0..1
-  final List<double> rightFoot;  // 16 sensor values 0..1
-  final double totalLoad;        // %BW
+  final FootZones left;
+  final FootZones right;
+  final double totalLoad;        // % of full-scale
   final double heelLoad;
   final double forefootLoad;
   final double asymmetry;        // %
-  final double stability;        // COP SD cm
+  final double stability;        // COP excursion SD (computed from history)
 
   const PlantarData({
-    this.leftFoot = const [],
-    this.rightFoot = const [],
+    this.left = const FootZones(),
+    this.right = const FootZones(),
     this.totalLoad = 0,
     this.heelLoad = 0,
     this.forefootLoad = 0,
@@ -89,8 +136,8 @@ class PlantarData {
   });
 
   factory PlantarData.fromJson(Map<String, dynamic> j) => PlantarData(
-    leftFoot:    List<double>.from((j['leftFoot']  ?? []).map((e) => e.toDouble())),
-    rightFoot:   List<double>.from((j['rightFoot'] ?? []).map((e) => e.toDouble())),
+    left:        FootZones.fromJson(j['left']  as Map<String, dynamic>?),
+    right:       FootZones.fromJson(j['right'] as Map<String, dynamic>?),
     totalLoad:   (j['totalLoad']   ?? 0.0).toDouble(),
     heelLoad:    (j['heelLoad']    ?? 0.0).toDouble(),
     forefootLoad:(j['forefootLoad']?? 0.0).toDouble(),
@@ -98,10 +145,10 @@ class PlantarData {
     stability:   (j['stability']   ?? 0.0).toDouble(),
   );
 
-  static PlantarData get demo => PlantarData(
-    leftFoot:  [0.2,0.3,0.4,0.3, 0.5,0.9,0.7,0.4, 0.3,0.5,0.4,0.2, 0.6,0.8,0.9,0.7],
-    rightFoot: [0.2,0.4,0.3,0.2, 0.6,0.9,0.8,0.5, 0.3,0.5,0.4,0.2, 0.7,0.9,0.9,0.8],
-    totalLoad: 72.4, heelLoad: 34.1, forefootLoad: 38.3, asymmetry: 8.7, stability: 0.64,
+  static PlantarData get demo => const PlantarData(
+    left:  FootZones(toe: 0.55, midInner: 0.40, midOuter: 0.35, heel: 0.80),
+    right: FootZones(toe: 0.60, midInner: 0.45, midOuter: 0.30, heel: 0.85),
+    totalLoad: 53.8, heelLoad: 82.5, forefootLoad: 57.5, asymmetry: 6.2, stability: 0.64,
   );
 }
 
@@ -119,12 +166,44 @@ class SensorStatus {
   );
 }
 
+/// Live EEG metrics from the Unicorn (mean band power µV², per-channel RMS µV,
+/// and signal-quality flags). Null when no EEG is streaming.
+class EegData {
+  final double theta;
+  final double alpha;
+  final double beta;
+  final String quality;   // Good | Fair | Poor
+  final String artifact;  // Low | High
+  final List<double> channels; // per-channel RMS µV (length 8 when present)
+
+  const EegData({
+    this.theta = 0,
+    this.alpha = 0,
+    this.beta = 0,
+    this.quality = '—',
+    this.artifact = '—',
+    this.channels = const [],
+  });
+
+  factory EegData.fromJson(Map<String, dynamic> j) => EegData(
+    theta: (j['theta'] ?? 0).toDouble(),
+    alpha: (j['alpha'] ?? 0).toDouble(),
+    beta:  (j['beta']  ?? 0).toDouble(),
+    quality:  j['quality']  ?? '—',
+    artifact: j['artifact'] ?? '—',
+    channels: List<double>.from(
+        (j['channels'] ?? const []).map((e) => (e as num).toDouble())),
+  );
+}
+
 class TelerehabState {
   final SessionInfo session;
   final List<JointAngleData> jointAngles;
   final PlantarData plantar;
   final SensorStatus sensors;
   final List<double> pressureHistory; // rolling buffer of total load
+  final Skeleton3D? skeleton;         // 3D joint coords from the ZED, if present
+  final EegData? eeg;                 // live EEG metrics, if streaming
 
   const TelerehabState({
     required this.session,
@@ -132,6 +211,8 @@ class TelerehabState {
     required this.plantar,
     required this.sensors,
     this.pressureHistory = const [],
+    this.skeleton,
+    this.eeg,
   });
 
   factory TelerehabState.fromJson(Map<String, dynamic> j) => TelerehabState(
@@ -142,6 +223,12 @@ class TelerehabState {
     sensors:     SensorStatus.fromJson(j['sensors'] ?? {}),
     pressureHistory: List<double>.from(
         (j['pressureHistory'] ?? []).map((e) => e.toDouble())),
+    skeleton:    j['skeleton'] != null
+        ? Skeleton3D.fromJson(j['skeleton'] as Map<String, dynamic>)
+        : null,
+    eeg:         j['eeg'] != null
+        ? EegData.fromJson(j['eeg'] as Map<String, dynamic>)
+        : null,
   );
 
   static TelerehabState get demo => TelerehabState(
@@ -159,6 +246,11 @@ class TelerehabState {
     plantar: PlantarData.demo,
     sensors: const SensorStatus(camera: true, pressureInsole: true, eeg: true),
     pressureHistory: [50,55,60,65,72,78,74,70,68,72,75,72],
+    skeleton: Skeleton3D.seatedDemo(kneeAngleDeg: 52),
+    eeg: const EegData(
+      theta: 6.2, alpha: 9.8, beta: 4.4, quality: 'Good', artifact: 'Low',
+      channels: [22, 18, 15, 19, 20, 24, 23, 14],
+    ),
   );
 }
 

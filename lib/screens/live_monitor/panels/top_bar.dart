@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../services/unity_connection_service.dart';
-import '../../../models/telerehab_state.dart';
 import '../../../theme/app_theme.dart';
 
 class TopBar extends StatefulWidget {
@@ -35,7 +34,7 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: const BoxDecoration(
         color: Color(0xFF060F22),
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+        border: Border(bottom: BorderSide(color: AppColors.inkBorder)),
       ),
       child: Row(children: [
         // ── Back button ─────────────────────────────────────────────────
@@ -47,11 +46,11 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
             child: Container(
               width: 30, height: 30,
               decoration: BoxDecoration(
-                color: AppColors.surfaceLight,
+                color: AppColors.inkSurfaceAlt,
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: AppColors.inkBorder),
               ),
-              child: const Icon(Icons.arrow_back, color: AppColors.textPrimary, size: 16),
+              child: const Icon(Icons.arrow_back, color: AppColors.inkText, size: 16),
             ),
           ),
         ),
@@ -64,8 +63,8 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
           flex: 2,
           child: Text('Multimodal Telerehab Monitor',
               overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.inter(
-                color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600,
+              style: GoogleFonts.schibstedGrotesk(
+                color: AppColors.inkText, fontSize: 13, fontWeight: FontWeight.w600,
               )),
         ),
 
@@ -84,44 +83,65 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
 
         const Spacer(),
 
-        // Recording timer
+        // Recording / standby indicator
         AnimatedBuilder(
           animation: _pulse,
-          builder: (_, __) => Row(children: [
-            if (s.session.isRecording) ...[
+          builder: (_, __) {
+            // Connected but no real frame yet = sensors still warming up.
+            final warming = svc.isConnected && !svc.receivingLive;
+            final rec = s.session.isRecording;
+            final paused = s.session.isPaused;
+            final (Color dotColor, Color textColor, String label) = warming
+                ? (AppColors.accentOrange, AppColors.accentOrange,
+                    'Warming up sensors…')
+                : !rec
+                    ? (AppColors.inkMuted, AppColors.inkMuted,
+                        'Standby — press ● to record')
+                    : paused
+                        ? (AppColors.accentOrange, AppColors.accentOrange,
+                            'Paused  ${_formatTime(s.session.recordingSeconds)}')
+                        : (AppColors.accentRed, AppColors.inkText,
+                            'Recording  ${_formatTime(s.session.recordingSeconds)}');
+            final pulsing = warming || (rec && !paused);
+            return Row(children: [
               Container(
-                width: 8, height: 8,
+                width: 8,
+                height: 8,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.accentRed.withOpacity(0.4 + 0.6 * _pulse.value),
+                  // Pulse while warming up or actively recording; solid otherwise.
+                  color: pulsing
+                      ? dotColor.withValues(alpha: 0.4 + 0.6 * _pulse.value)
+                      : dotColor.withValues(alpha: rec ? 1 : 0.4),
                 ),
               ),
               const SizedBox(width: 6),
-            ],
-            Text(
-              'Recording  ${_formatTime(s.session.recordingSeconds)}',
-              style: GoogleFonts.inter(
-                color: s.session.isRecording ? AppColors.textPrimary : AppColors.textSecondary,
-                fontSize: 13, fontWeight: FontWeight.w500,
+              Text(
+                label,
+                style: GoogleFonts.schibstedGrotesk(
+                  color: textColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-          ]),
+            ]);
+          },
         ),
 
         const SizedBox(width: 16),
 
-        // Control buttons (icon-only with tooltip to save space)
-        _IconBtn(Icons.play_arrow, 'Start',      AppColors.accent,
-          () => svc.sendCommand(UnityCommand('start_recording'))),
+        // Recording controls — these drive the Unity capture session
+        _IconBtn(Icons.fiber_manual_record, 'Start recording', AppColors.accentGreen,
+          svc.startRecording),
         const SizedBox(width: 4),
-        _IconBtn(Icons.stop,       'Stop',       AppColors.accentRed,
-          () => svc.sendCommand(UnityCommand('stop_recording'))),
+        _IconBtn(Icons.pause, 'Pause recording', AppColors.accentOrange,
+          svc.pauseRecording),
         const SizedBox(width: 4),
-        _IconBtn(Icons.pause,      'Pause',      AppColors.accentOrange,
-          () => svc.sendCommand(UnityCommand('pause_recording'))),
+        _IconBtn(Icons.stop, 'Stop & save session', AppColors.accentRed,
+          svc.stopRecording),
         const SizedBox(width: 4),
-        _IconBtn(Icons.flag_outlined, 'Mark Event', AppColors.textSecondary,
-          () => svc.sendCommand(UnityCommand('mark_event'))),
+        _IconBtn(Icons.flag_outlined, 'Mark event', AppColors.inkMuted,
+          svc.markEvent),
 
         const SizedBox(width: 12),
 
@@ -138,7 +158,7 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
         _ConnectionDot(svc),
         const SizedBox(width: 8),
         IconButton(
-          icon: const Icon(Icons.more_vert, color: AppColors.textSecondary, size: 18),
+          icon: const Icon(Icons.more_vert, color: AppColors.inkMuted, size: 18),
           onPressed: () => _showConnectionDialog(context, svc),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
@@ -150,15 +170,15 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
   void _showConnectionDialog(BuildContext ctx, UnityConnectionService svc) {
     final controller = TextEditingController(text: 'ws://localhost:8765');
     showDialog(context: ctx, builder: (dialogCtx) => AlertDialog(
-      backgroundColor: AppColors.surface,
-      title: Text('Unity Connection', style: GoogleFonts.inter(color: AppColors.textPrimary)),
+      backgroundColor: AppColors.inkSurface,
+      title: Text('Unity Connection', style: GoogleFonts.schibstedGrotesk(color: AppColors.inkText)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         TextField(
           controller: controller,
-          style: GoogleFonts.inter(color: AppColors.textPrimary),
+          style: GoogleFonts.schibstedGrotesk(color: AppColors.inkText),
           decoration: InputDecoration(
             labelText: 'WebSocket URL',
-            labelStyle: GoogleFonts.inter(color: AppColors.textSecondary),
+            labelStyle: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted),
             border: const OutlineInputBorder(),
           ),
         ),
@@ -166,12 +186,12 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
         Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
           TextButton(
             onPressed: () { Navigator.pop(dialogCtx); svc.enableDemoMode(); },
-            child: Text('Demo Mode', style: GoogleFonts.inter(color: AppColors.accentOrange)),
+            child: Text('Demo Mode', style: GoogleFonts.schibstedGrotesk(color: AppColors.accentOrange)),
           ),
           ElevatedButton(
             onPressed: () async { Navigator.pop(dialogCtx); await svc.connect(controller.text); },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent),
-            child: Text('Connect', style: GoogleFonts.inter(color: Colors.white)),
+            child: Text('Connect', style: GoogleFonts.schibstedGrotesk(color: Colors.white)),
           ),
         ]),
       ]),
@@ -199,9 +219,9 @@ class _InfoChip extends StatelessWidget {
     mainAxisAlignment: MainAxisAlignment.center,
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 9)),
-      Text(value, style: GoogleFonts.inter(
-        color: color ?? AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600,
+      Text(label, style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 9)),
+      Text(value, style: GoogleFonts.schibstedGrotesk(
+        color: color ?? AppColors.inkText, fontSize: 13, fontWeight: FontWeight.w600,
       )),
     ],
   );
@@ -253,13 +273,13 @@ class _SensorChip extends StatelessWidget {
     child: Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, size: 12, color: connected ? AppColors.accentGreen : AppColors.accentRed),
       const SizedBox(width: 4),
-      Text(label, style: GoogleFonts.inter(
+      Text(label, style: GoogleFonts.schibstedGrotesk(
         color: connected ? AppColors.accentGreen : AppColors.accentRed,
         fontSize: 10, fontWeight: FontWeight.w500,
       )),
       const SizedBox(width: 4),
       Text(connected ? 'Connected' : 'Offline',
-        style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 9)),
+        style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 9)),
     ]),
   );
 }
@@ -273,7 +293,7 @@ class _ConnectionDot extends StatelessWidget {
     final (color, tip) = switch (svc.connectionState) {
       UnityConnectionStatus.connected    => (AppColors.accentGreen, 'Unity connected'),
       UnityConnectionStatus.connecting   => (AppColors.accentOrange, 'Connecting…'),
-      UnityConnectionStatus.disconnected => (AppColors.textSecondary, 'Demo mode'),
+      UnityConnectionStatus.disconnected => (AppColors.inkMuted, 'Demo mode'),
       UnityConnectionStatus.error        => (AppColors.accentRed, 'Connection error'),
     };
     return Tooltip(message: tip, child: Container(

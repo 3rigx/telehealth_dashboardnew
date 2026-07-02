@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -22,21 +21,13 @@ class PlantarPressurePanel extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(8),
         child: Column(children: [
-          // ── Foot heatmaps + legend ─────────────────────────────────
+          // ── Foot zone maps + legend ────────────────────────────────
           Expanded(
             flex: 5,
             child: Row(children: [
-              Expanded(child: _FootHeatmap(
-                label: 'Left Foot',
-                values: p.leftFoot.isEmpty ? List.filled(16, 0.0) : p.leftFoot,
-                isLeft: true,
-              )),
+              Expanded(child: _FootZonesView(label: 'Left Foot', zones: p.left, isLeft: true)),
               const SizedBox(width: 6),
-              Expanded(child: _FootHeatmap(
-                label: 'Right Foot',
-                values: p.rightFoot.isEmpty ? List.filled(16, 0.0) : p.rightFoot,
-                isLeft: false,
-              )),
+              Expanded(child: _FootZonesView(label: 'Right Foot', zones: p.right, isLeft: false)),
               const SizedBox(width: 6),
               _PressureLegend(),
             ]),
@@ -46,7 +37,6 @@ class PlantarPressurePanel extends StatelessWidget {
           Expanded(
             flex: 4,
             child: Row(children: [
-              // Pressure-over-time chart
               Expanded(
                 flex: 3,
                 child: _PressureTimeChart(
@@ -55,11 +45,7 @@ class PlantarPressurePanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              // Metrics column
-              SizedBox(
-                width: 148,
-                child: _MetricsColumn(p: p),
-              ),
+              SizedBox(width: 152, child: _MetricsColumn(p: p)),
             ]),
           ),
         ]),
@@ -68,68 +54,33 @@ class PlantarPressurePanel extends StatelessWidget {
   }
 }
 
-// ── Anatomical foot heatmap ───────────────────────────────────────────────────
-class _FootHeatmap extends StatelessWidget {
+// ── Four-zone anatomical foot view ───────────────────────────────────────────
+class _FootZonesView extends StatelessWidget {
   final String label;
-  final List<double> values; // 16 sensor values 0..1
+  final FootZones zones;
   final bool isLeft;
 
-  const _FootHeatmap({
-    required this.label,
-    required this.values,
-    required this.isLeft,
-  });
+  const _FootZonesView({required this.label, required this.zones, required this.isLeft});
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      Text(label, style: GoogleFonts.inter(
-        color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.w500,
+      Text(label, style: GoogleFonts.schibstedGrotesk(
+        color: AppColors.inkMuted, fontSize: 10, fontWeight: FontWeight.w500,
       )),
       const SizedBox(height: 4),
       Expanded(child: CustomPaint(
-        painter: _FootPainter(
-          values: values.length == 16 ? values : List.filled(16, 0.0),
-          isLeft: isLeft,
-        ),
+        painter: _FootZonesPainter(zones: zones, isLeft: isLeft),
         child: const SizedBox.expand(),
       )),
     ]);
   }
 }
 
-// Sensor layout — 16 sensors mapped to normalised (x, y) positions
-// on a plantar insole where (0,0) = top-left of bounding box,
-// (1,1) = bottom-right.  X increases lateral→medial, Y increases toe→heel.
-List<Offset> _sensorPositions(bool isLeft) {
-  // Standard 4-column, 5-row-ish insole layout (viewed plantar/from below)
-  // Column order (x): 0.15, 0.38, 0.62, 0.85
-  // The foot is mirrored for right foot (flip x: x' = 1 - x)
-  const raw = [
-    // Row 0 — toes (y=0.08)
-    Offset(0.18, 0.08), Offset(0.40, 0.08), Offset(0.62, 0.08), Offset(0.82, 0.08),
-    // Row 1 — ball (y=0.25)
-    Offset(0.15, 0.26), Offset(0.40, 0.26), Offset(0.62, 0.26), Offset(0.82, 0.26),
-    // Row 2 — mid-foot (y=0.45)
-    Offset(0.15, 0.46), Offset(0.40, 0.46), Offset(0.62, 0.46), Offset(0.80, 0.46),
-    // Row 3 — arch/lower-mid (y=0.64)
-    Offset(0.16, 0.65), Offset(0.42, 0.65), Offset(0.64, 0.65), Offset(0.80, 0.65),
-    // Row 4 — heel (y=0.83) — only two central sensors
-    // We treat sensors 15 & 16 as being at heel
-  ];
-  // Remap: sensors 1-14 = raw[0..13], sensors 15-16 at heel
-  // But we only have 16 sensors total, so heel gets indices 14 & 15:
-  const heel = [Offset(0.35, 0.84), Offset(0.65, 0.84)];
-  final positions = [...raw.take(14), ...heel];
-  if (isLeft) return positions;
-  // Mirror for right foot
-  return positions.map((p) => Offset(1.0 - p.dx, p.dy)).toList();
-}
-
-class _FootPainter extends CustomPainter {
-  final List<double> values;
+class _FootZonesPainter extends CustomPainter {
+  final FootZones zones;
   final bool isLeft;
-  _FootPainter({required this.values, required this.isLeft});
+  _FootZonesPainter({required this.zones, required this.isLeft});
 
   static Color _heat(double v) {
     v = v.clamp(0.0, 1.0);
@@ -140,35 +91,26 @@ class _FootPainter extends CustomPainter {
     return           Color.lerp(const Color(0xFFFFAA00), const Color(0xFFFF1100), (v-0.80)/0.20)!;
   }
 
-  // Builds an anatomical foot outline path (plantar view)
-  // Coords are in normalised [0,1]×[0,1] — caller must transform.
-  Path _footOutline(double w, double h) {
-    // The foot shape: rounded rectangle with arch cutout on one side
-    // For left foot: arch is on the right side (lateral = left, medial = right)
-    final medX = isLeft ? w * 0.85 : w * 0.15; // medial side x
-    final latX = isLeft ? w * 0.15 : w * 0.85; // lateral side x
+  // Normalised zone centres (x medial/lateral resolved by foot side, y toe→heel).
+  Offset _toe()   => const Offset(0.50, 0.13);
+  Offset _heel()  => const Offset(0.50, 0.85);
+  Offset _inner() => Offset(isLeft ? 0.66 : 0.34, 0.48); // medial
+  Offset _outer() => Offset(isLeft ? 0.34 : 0.66, 0.48); // lateral
 
+  Path _footOutline(double w, double h) {
+    final medX = isLeft ? w * 0.85 : w * 0.15;
+    final latX = isLeft ? w * 0.15 : w * 0.85;
     final path = Path();
-    // Start at top-lateral (near little toe)
     path.moveTo(latX, h * 0.02);
-    // Toe region — rounded top
     path.quadraticBezierTo(w * 0.50, h * -0.04, medX, h * 0.02);
-    // Medial side going down, with mild arch bulge inward
     path.cubicTo(
       medX + (isLeft ? -w*0.05 : w*0.05), h * 0.30,
-      medX + (isLeft ? -w*0.20 : w*0.20), h * 0.52,  // arch narrows here
+      medX + (isLeft ? -w*0.20 : w*0.20), h * 0.52,
       medX + (isLeft ? -w*0.10 : w*0.10), h * 0.72,
     );
-    // Heel - medial side
     path.quadraticBezierTo(medX, h * 0.90, w * 0.50, h * 0.98);
-    // Heel - lateral side
     path.quadraticBezierTo(latX, h * 0.90, latX + (isLeft ? w*0.05 : -w*0.05), h * 0.70);
-    // Lateral side going up
-    path.cubicTo(
-      latX, h * 0.55,
-      latX, h * 0.30,
-      latX, h * 0.02,
-    );
+    path.cubicTo(latX, h * 0.55, latX, h * 0.30, latX, h * 0.02);
     path.close();
     return path;
   }
@@ -176,71 +118,74 @@ class _FootPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-    final w = size.width;
-    final h = size.height;
-
+    final w = size.width, h = size.height;
     final footPath = _footOutline(w, h);
 
-    // Clip to foot shape
     canvas.save();
     canvas.clipPath(footPath);
+    canvas.drawRect(Offset.zero & size,
+        Paint()..color = const Color(0xFF0033CC).withValues(alpha: 0.22));
 
-    // Fill background (no-pressure colour)
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0033CC).withValues(alpha: 0.25));
+    final blobs = <(Offset, double, String)>[
+      (_toe(),   zones.toe,      'Toe'),
+      (_inner(), zones.midInner, 'Med'),
+      (_outer(), zones.midOuter, 'Lat'),
+      (_heel(),  zones.heel,     'Heel'),
+    ];
 
-    // Draw Gaussian-blended heat blobs for each sensor
-    final positions = _sensorPositions(isLeft);
-    for (int i = 0; i < min(positions.length, values.length); i++) {
-      final p   = positions[i];
-      final v   = values[i];
+    for (final (pos, v, _) in blobs) {
       if (v <= 0.02) continue;
-      final cx  = p.dx * w;
-      final cy  = p.dy * h;
-      final r   = w * 0.28 * (0.6 + v * 0.7);
-      final col = _heat(v);
-      canvas.drawCircle(
-        Offset(cx, cy),
-        r,
-        Paint()..shader = RadialGradient(
-          colors: [
-            col.withValues(alpha: (0.7 * v + 0.2).clamp(0.0, 0.85)),
-            col.withValues(alpha: 0.0),
-          ],
-        ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: r)),
-      );
+      final c = Offset(pos.dx * w, pos.dy * h);
+      final r = w * 0.42 * (0.55 + v * 0.6);
+      canvas.drawCircle(c, r, Paint()
+        ..shader = RadialGradient(colors: [
+          _heat(v).withValues(alpha: (0.75 * v + 0.2).clamp(0.0, 0.9)),
+          _heat(v).withValues(alpha: 0.0),
+        ]).createShader(Rect.fromCircle(center: c, radius: r)));
     }
 
-    // Draw sensor number labels
-    for (int i = 0; i < min(positions.length, 16); i++) {
-      final p  = positions[i];
-      final cx = p.dx * w;
-      final cy = p.dy * h;
-      final tp = TextPainter(
-        text: TextSpan(
-          text: '${i + 1}',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.55),
-            fontSize: (w * 0.11).clamp(7.0, 12.0),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+    // Zone labels + values
+    for (final (pos, v, name) in blobs) {
+      final c = Offset(pos.dx * w, pos.dy * h);
+      _text(canvas, name, c.translate(0, -7), 8.5, Colors.white.withValues(alpha: 0.65));
+      _text(canvas, '${(v * 100).round()}', c.translate(0, 4), 11,
+          Colors.white.withValues(alpha: 0.95), bold: true);
     }
 
+    // Center-of-pressure marker (weighted centroid of the four zones)
+    final total = zones.sum;
+    if (total > 0.04) {
+      double cx = 0, cy = 0;
+      for (final (pos, v, _) in blobs) { cx += pos.dx * v; cy += pos.dy * v; }
+      final cop = Offset(cx / total * w, cy / total * h);
+      canvas.drawCircle(cop, 7, Paint()
+        ..color = Colors.white.withValues(alpha: 0.25));
+      canvas.drawCircle(cop, 4, Paint()..color = Colors.white);
+      canvas.drawCircle(cop, 4, Paint()
+        ..color = AppColors.accentRed
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6);
+    }
     canvas.restore();
 
-    // Foot outline border
     canvas.drawPath(footPath, Paint()
-      ..color = AppColors.border.withValues(alpha: 0.8)
+      ..color = AppColors.inkBorder.withValues(alpha: 0.8)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2);
   }
 
+  void _text(Canvas c, String s, Offset center, double size, Color color, {bool bold = false}) {
+    final tp = TextPainter(
+      text: TextSpan(text: s, style: GoogleFonts.schibstedGrotesk(
+        color: color, fontSize: size, fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(c, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
   @override
-  bool shouldRepaint(_FootPainter old) =>
-      old.values != values || old.isLeft != isLeft;
+  bool shouldRepaint(_FootZonesPainter old) =>
+      old.zones != zones || old.isLeft != isLeft;
 }
 
 // ── Pressure legend ───────────────────────────────────────────────────────────
@@ -249,24 +194,20 @@ class _PressureLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('Pressure\nIntensity', style: GoogleFonts.inter(
-          color: AppColors.textSecondary, fontSize: 8,
+        Text('Pressure\nIntensity', style: GoogleFonts.schibstedGrotesk(
+          color: AppColors.inkMuted, fontSize: 8,
         ), textAlign: TextAlign.center),
         const SizedBox(height: 6),
         Row(children: [
-          SizedBox(
-            width: 10, height: 90,
-            child: CustomPaint(painter: _GradientBarPainter()),
-          ),
+          SizedBox(width: 10, height: 90, child: CustomPaint(painter: _GradientBarPainter())),
           const SizedBox(width: 2),
           Column(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('High', style: GoogleFonts.inter(color: const Color(0xFFFF1100), fontSize: 7)),
+              Text('High', style: GoogleFonts.schibstedGrotesk(color: const Color(0xFFFF1100), fontSize: 7)),
               const SizedBox(height: 60),
-              Text('Low',  style: GoogleFonts.inter(color: const Color(0xFF0033CC), fontSize: 7)),
+              Text('Low',  style: GoogleFonts.schibstedGrotesk(color: const Color(0xFF0033CC), fontSize: 7)),
             ],
           ),
         ]),
@@ -285,12 +226,8 @@ class _GradientBarPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Color(0xFFFF1100),
-          Color(0xFFFFAA00),
-          Color(0xFFAAFF00),
-          Color(0xFF00DDAA),
-          Color(0xFF0099FF),
-          Color(0xFF0033CC),
+          Color(0xFFFF1100), Color(0xFFFFAA00), Color(0xFFAAFF00),
+          Color(0xFF00DDAA), Color(0xFF0099FF), Color(0xFF0033CC),
         ],
       ).createShader(rect),
     );
@@ -301,14 +238,13 @@ class _GradientBarPainter extends CustomPainter {
 // ── Pressure time chart — two lines (left + right) ───────────────────────────
 class _PressureTimeChart extends StatelessWidget {
   final List<double> history;
-  final double asymmetry; // % asymmetry to split total into L/R
+  final double asymmetry;
   const _PressureTimeChart({required this.history, required this.asymmetry});
 
   @override
   Widget build(BuildContext context) {
     if (history.length < 2) return const SizedBox();
 
-    // Derive left/right from total + asymmetry
     final leftSpots = <FlSpot>[];
     final rightSpots = <FlSpot>[];
     for (int i = 0; i < history.length; i++) {
@@ -322,8 +258,8 @@ class _PressureTimeChart extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          Text('Pressure Over Time (Total Load)', style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 8.5,
+          Text('Pressure Over Time (Total Load)', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 8.5,
           )),
           const SizedBox(width: 8),
           _LegendDot(AppColors.accentCyan, '← Left'),
@@ -337,23 +273,20 @@ class _PressureTimeChart extends StatelessWidget {
               gridData: FlGridData(
                 show: true,
                 drawVerticalLine: false,
-                getDrawingHorizontalLine: (_) => FlLine(
-                  color: AppColors.border, strokeWidth: 0.5,
-                ),
+                getDrawingHorizontalLine: (_) => FlLine(color: AppColors.inkBorder, strokeWidth: 0.5),
               ),
               titlesData: FlTitlesData(
                 rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 topTitles:   const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 leftTitles: AxisTitles(
-                  axisNameWidget: Text('% Body\nWeight', style: GoogleFonts.inter(
-                    color: AppColors.textSecondary, fontSize: 7,
+                  axisNameWidget: Text('% load', style: GoogleFonts.schibstedGrotesk(
+                    color: AppColors.inkMuted, fontSize: 7,
                   )),
                   axisNameSize: 28,
                   sideTitles: SideTitles(
-                    showTitles: true, reservedSize: 26,
-                    interval: 25,
+                    showTitles: true, reservedSize: 26, interval: 25,
                     getTitlesWidget: (v, _) => Text('${v.toInt()}',
-                      style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 7.5)),
+                      style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 7.5)),
                   ),
                 ),
                 bottomTitles: AxisTitles(sideTitles: SideTitles(
@@ -361,38 +294,28 @@ class _PressureTimeChart extends StatelessWidget {
                   getTitlesWidget: (v, _) {
                     final t = -(history.length - 1 - v.toInt());
                     if (t % 2 != 0) return const SizedBox();
-                    return Text('${t}s', style: GoogleFonts.inter(
-                      color: AppColors.textSecondary, fontSize: 7.5));
+                    return Text('${t}s', style: GoogleFonts.schibstedGrotesk(
+                      color: AppColors.inkMuted, fontSize: 7.5));
                   },
                 )),
               ),
               borderData: FlBorderData(
                 show: true,
-                border: Border(bottom: BorderSide(color: AppColors.border)),
+                border: Border(bottom: BorderSide(color: AppColors.inkBorder)),
               ),
               minY: 0, maxY: 100,
               lineBarsData: [
                 LineChartBarData(
-                  spots: leftSpots,
-                  isCurved: true, curveSmoothness: 0.35,
-                  color: AppColors.accentCyan,
-                  barWidth: 1.8,
+                  spots: leftSpots, isCurved: true, curveSmoothness: 0.35,
+                  color: AppColors.accentCyan, barWidth: 1.8,
                   dotData: const FlDotData(show: false),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: AppColors.accentCyan.withValues(alpha: 0.06),
-                  ),
+                  belowBarData: BarAreaData(show: true, color: AppColors.accentCyan.withValues(alpha: 0.06)),
                 ),
                 LineChartBarData(
-                  spots: rightSpots,
-                  isCurved: true, curveSmoothness: 0.35,
-                  color: AppColors.accentOrange,
-                  barWidth: 1.8,
+                  spots: rightSpots, isCurved: true, curveSmoothness: 0.35,
+                  color: AppColors.accentOrange, barWidth: 1.8,
                   dotData: const FlDotData(show: false),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: AppColors.accentOrange.withValues(alpha: 0.06),
-                  ),
+                  belowBarData: BarAreaData(show: true, color: AppColors.accentOrange.withValues(alpha: 0.06)),
                 ),
               ],
             ),
@@ -413,7 +336,7 @@ class _LegendDot extends StatelessWidget {
       color: color, borderRadius: BorderRadius.circular(1),
     )),
     const SizedBox(width: 3),
-    Text(label, style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 7.5)),
+    Text(label, style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 7.5)),
   ]);
 }
 
@@ -427,37 +350,32 @@ class _MetricsColumn extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: AppColors.surfaceLight,
+        color: AppColors.inkSurfaceAlt,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: AppColors.inkBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Pressure Metrics', style: GoogleFonts.inter(
-            color: AppColors.textSecondary,
-            fontSize: 9, fontWeight: FontWeight.w600,
+          Text('Pressure Metrics', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 9, fontWeight: FontWeight.w600,
           )),
           const SizedBox(height: 6),
           ..._rows(p).map((r) => Padding(
             padding: const EdgeInsets.symmetric(vertical: 2.5),
             child: Row(children: [
-              Expanded(child: Text(r.$1, style: GoogleFonts.inter(
-                color: AppColors.textSecondary, fontSize: 9,
+              Expanded(child: Text(r.$1, style: GoogleFonts.schibstedGrotesk(
+                color: AppColors.inkMuted, fontSize: 9,
               ))),
-              Text(r.$2, style: GoogleFonts.inter(
-                color: r.$3 ?? AppColors.textPrimary,
+              Text(r.$2, style: GoogleFonts.schibstedGrotesk(
+                color: r.$3 ?? AppColors.inkText,
                 fontSize: 9.5, fontWeight: FontWeight.w700,
               )),
               if (r.$4 != null) ...[
                 const SizedBox(width: 4),
-                Container(
-                  width: 6, height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: r.$4,
-                  ),
-                ),
+                Container(width: 6, height: 6, decoration: BoxDecoration(
+                  shape: BoxShape.circle, color: r.$4,
+                )),
               ],
             ]),
           )),
@@ -467,11 +385,11 @@ class _MetricsColumn extends StatelessWidget {
   }
 
   List<(String, String, Color?, Color?)> _rows(PlantarData p) => [
-    ('Total Load',         '${p.totalLoad.toStringAsFixed(1)} %BW',    null, null),
-    ('Heel Load',          '${p.heelLoad.toStringAsFixed(1)} %BW',     null, null),
-    ('Forefoot Load',      '${p.forefootLoad.toStringAsFixed(1)} %BW', null, null),
-    ('Left / Right Asymmetry', '${p.asymmetry.toStringAsFixed(1)} %',  null, null),
-    ('Stability (COP SD)',
+    ('Total Load',        '${p.totalLoad.toStringAsFixed(1)} %',    null, null),
+    ('Heel Load',         '${p.heelLoad.toStringAsFixed(1)} %',     null, null),
+    ('Forefoot Load',     '${p.forefootLoad.toStringAsFixed(1)} %', null, null),
+    ('L / R Asymmetry',   '${p.asymmetry.toStringAsFixed(1)} %',    null, null),
+    ('Stability (COP)',
       '${p.stability.toStringAsFixed(2)} cm',
       p.stability < 1.0 ? AppColors.accentGreen : AppColors.accentOrange,
       p.stability < 1.0 ? AppColors.accentGreen : AppColors.accentOrange,

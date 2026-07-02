@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+import '../../../services/unity_connection_service.dart';
 import '../../../theme/app_theme.dart';
 
 class EEGPanel extends StatefulWidget {
@@ -46,6 +48,34 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    final eeg = context.watch<UnityConnectionService>().state.eeg;
+
+    // Band powers — real when the Unicorn streams, else the static placeholders.
+    final bands = eeg != null
+        ? [
+            ('Theta', '4–7 Hz', eeg.theta, const Color(0xFF5B9BFF)),
+            ('Alpha', '8–12 Hz', eeg.alpha, const Color(0xFF00C896)),
+            ('Beta', '13–30 Hz', eeg.beta, const Color(0xFFFF5B7A)),
+          ]
+        : _bandPower;
+
+    // Per-channel waveform amplitude from real RMS, normalised to the busiest channel.
+    final ampScale = List<double>.filled(_channels.length, 1.0);
+    if (eeg != null && eeg.channels.isNotEmpty) {
+      final maxR = eeg.channels.reduce(max);
+      for (var i = 0; i < _channels.length; i++) {
+        final r = i < eeg.channels.length ? eeg.channels[i] : 0.0;
+        ampScale[i] = maxR > 0 ? (0.2 + 0.8 * (r / maxR)).clamp(0.1, 1.0) : 1.0;
+      }
+    }
+
+    final quality = eeg?.quality ?? 'Good';
+    final artifact = eeg?.artifact ?? 'Low';
+    final qColor = quality == 'Good'
+        ? AppColors.accentGreen
+        : (quality == 'Fair' ? AppColors.accentOrange : AppColors.accentRed);
+    final aColor = artifact == 'Low' ? AppColors.accentGreen : AppColors.accentOrange;
+
     return DashboardPanel(
       title: 'EEG Monitoring',
       icon: Icons.psychology_outlined,
@@ -53,19 +83,19 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
       trailing: Padding(
         padding: const EdgeInsets.only(right: 4),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('Live EEG (8 Channels)', style: GoogleFonts.inter(
-            color: AppColors.textSecondary, fontSize: 9,
+          Text('Live EEG (8 Channels)', style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.inkMuted, fontSize: 9,
           )),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
             decoration: BoxDecoration(
-              color: AppColors.surfaceLight,
+              color: AppColors.inkSurfaceAlt,
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(color: AppColors.inkBorder),
             ),
-            child: Text('Scale: 50 µV', style: GoogleFonts.inter(
-              color: AppColors.textSecondary, fontSize: 8.5,
+            child: Text('Scale: 50 µV', style: GoogleFonts.schibstedGrotesk(
+              color: AppColors.inkMuted, fontSize: 8.5,
             )),
           ),
         ]),
@@ -85,6 +115,7 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
                     tick: _ctrl.value,
                     channelIndex: i,
                     params: _channelParams[i],
+                    ampScale: ampScale[i],
                   ),
                 )),
               ),
@@ -108,11 +139,11 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
               ),
               const SizedBox(height: 8),
               // Band power legend
-              Text('Band Power (µV²)', style: GoogleFonts.inter(
-                color: AppColors.textSecondary, fontSize: 7.5,
+              Text('Band Power (µV²)', style: GoogleFonts.schibstedGrotesk(
+                color: AppColors.inkMuted, fontSize: 7.5,
               )),
               const SizedBox(height: 4),
-              ..._bandPower.map((b) => Padding(
+              ...bands.map((b) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(children: [
                   Container(width: 8, height: 8, decoration: BoxDecoration(
@@ -120,16 +151,16 @@ class _EEGPanelState extends State<EEGPanel> with SingleTickerProviderStateMixin
                   )),
                   const SizedBox(width: 4),
                   Expanded(child: Text(b.$1,
-                    style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 8))),
-                  Text(b.$3.toStringAsFixed(2), style: GoogleFonts.inter(
-                    color: AppColors.textPrimary, fontSize: 9, fontWeight: FontWeight.w700)),
+                    style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 8))),
+                  Text(b.$3.toStringAsFixed(2), style: GoogleFonts.schibstedGrotesk(
+                    color: AppColors.inkText, fontSize: 9, fontWeight: FontWeight.w700)),
                 ]),
               )),
               const Spacer(),
-              // Status rows
-              _StatusRow('Signal Quality', AppColors.accentGreen, 'Good'),
+              // Status rows (live signal-quality flags from the connector)
+              _StatusRow('Signal Quality', qColor, quality),
               const SizedBox(height: 3),
-              _StatusRow('Artifact Level', AppColors.accentGreen, 'Low'),
+              _StatusRow('Artifact Level', aColor, artifact),
             ]),
           ),
         ]),
@@ -144,12 +175,14 @@ class _WaveformRow extends StatelessWidget {
   final double tick;         // 0..1 animation phase
   final int channelIndex;
   final (double, double, double, double) params; // alpha, beta, theta, noise amps
+  final double ampScale;     // 0..1 live amplitude from real per-channel RMS
 
   const _WaveformRow({
     required this.label,
     required this.tick,
     required this.channelIndex,
     required this.params,
+    this.ampScale = 1.0,
   });
 
   @override
@@ -157,8 +190,8 @@ class _WaveformRow extends StatelessWidget {
     return Row(children: [
       SizedBox(
         width: 22,
-        child: Text(label, style: GoogleFonts.inter(
-          color: AppColors.textSecondary, fontSize: 9, fontWeight: FontWeight.w500,
+        child: Text(label, style: GoogleFonts.schibstedGrotesk(
+          color: AppColors.inkMuted, fontSize: 9, fontWeight: FontWeight.w500,
         )),
       ),
       Expanded(
@@ -170,6 +203,7 @@ class _WaveformRow extends StatelessWidget {
             betaAmp:  params.$2,
             thetaAmp: params.$3,
             noiseAmp: params.$4,
+            ampScale: ampScale,
           ),
           child: const SizedBox.expand(),
         ),
@@ -182,6 +216,7 @@ class _EEGWaveformPainter extends CustomPainter {
   final double tick;
   final int channelIndex;
   final double alphaAmp, betaAmp, thetaAmp, noiseAmp;
+  final double ampScale; // scales the drawn trace by the channel's live RMS
   // Per-channel pseudo-random noise seed
   late final Random _rng;
 
@@ -192,6 +227,7 @@ class _EEGWaveformPainter extends CustomPainter {
     required this.betaAmp,
     required this.thetaAmp,
     required this.noiseAmp,
+    this.ampScale = 1.0,
   }) {
     _rng = Random(channelIndex * 137 + 42);
   }
@@ -200,7 +236,7 @@ class _EEGWaveformPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final midY = size.height / 2;
-    final ampY = size.height * 0.38;
+    final ampY = size.height * 0.38 * ampScale;
     const pts  = 150;
     final phase = tick * 2 * pi + channelIndex * 0.9;
 
@@ -224,7 +260,7 @@ class _EEGWaveformPainter extends CustomPainter {
 
     // Baseline
     canvas.drawLine(Offset(0, midY), Offset(size.width, midY),
-      Paint()..color = AppColors.border..strokeWidth = 0.4);
+      Paint()..color = AppColors.inkBorder..strokeWidth = 0.4);
 
     // Waveform
     canvas.drawPath(path, Paint()
@@ -236,7 +272,8 @@ class _EEGWaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_EEGWaveformPainter old) => old.tick != tick;
+  bool shouldRepaint(_EEGWaveformPainter old) =>
+      old.tick != tick || old.ampScale != ampScale;
 }
 
 // ── Topographic head map ──────────────────────────────────────────────────────
@@ -266,10 +303,10 @@ class _TopoMapPainter extends CustomPainter {
 
     // Head circle
     canvas.drawCircle(Offset(cx, cy), r, Paint()
-      ..color = AppColors.surfaceLight
+      ..color = AppColors.inkSurfaceAlt
       ..style = PaintingStyle.fill);
     canvas.drawCircle(Offset(cx, cy), r, Paint()
-      ..color = AppColors.border
+      ..color = AppColors.inkBorder
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5);
 
@@ -277,12 +314,12 @@ class _TopoMapPainter extends CustomPainter {
     canvas.drawLine(
       Offset(cx - 4, cy - r + 1),
       Offset(cx,     cy - r - 5),
-      Paint()..color = AppColors.border..strokeWidth = 1.5..strokeCap = StrokeCap.round,
+      Paint()..color = AppColors.inkBorder..strokeWidth = 1.5..strokeCap = StrokeCap.round,
     );
     canvas.drawLine(
       Offset(cx, cy - r - 5),
       Offset(cx + 4, cy - r + 1),
-      Paint()..color = AppColors.border..strokeWidth = 1.5..strokeCap = StrokeCap.round,
+      Paint()..color = AppColors.inkBorder..strokeWidth = 1.5..strokeCap = StrokeCap.round,
     );
 
     // Animated activity blobs at motor/visual cortex areas
@@ -323,7 +360,7 @@ class _TopoMapPainter extends CustomPainter {
         ..strokeWidth = 0.8);
       final tp = TextPainter(
         text: TextSpan(text: e.$1,
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 6.5)),
+          style: const TextStyle(color: AppColors.inkMuted, fontSize: 6.5)),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(ex - tp.width / 2, ey - tp.height - 3));
@@ -342,13 +379,13 @@ class _StatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-    Expanded(child: Text(label, style: GoogleFonts.inter(
-      color: AppColors.textSecondary, fontSize: 8,
+    Expanded(child: Text(label, style: GoogleFonts.schibstedGrotesk(
+      color: AppColors.inkMuted, fontSize: 8,
     ))),
     Container(width: 5, height: 5, decoration: BoxDecoration(
       shape: BoxShape.circle, color: color,
     )),
     const SizedBox(width: 3),
-    Text(status, style: GoogleFonts.inter(color: color, fontSize: 8)),
+    Text(status, style: GoogleFonts.schibstedGrotesk(color: color, fontSize: 8)),
   ]);
 }

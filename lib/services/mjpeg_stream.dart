@@ -24,7 +24,12 @@ class MjpegStream {
 
   void _start() {
     _closed = false;
-    _connect();
+    // Some HttpClient connection errors (e.g. the endpoint isn't a real MJPEG
+    // server, or it speaks a different protocol) are raised asynchronously on
+    // the pooled connection, escaping the await-ed try/catch below. Guard the
+    // whole loop so such errors can never become unhandled and crash the app —
+    // the loop just keeps retrying.
+    runZonedGuarded(_connect, (_, _) {});
   }
 
   void _stop() {
@@ -37,31 +42,30 @@ class MjpegStream {
 
   Future<void> _connect() async {
     while (!_closed) {
+      HttpClient? client;
       try {
-        _client = HttpClient()
+        client = HttpClient()
           ..connectionTimeout = const Duration(seconds: 5)
           ..idleTimeout       = const Duration(hours: 1);
+        _client = client;
 
-        final req  = await _client!.getUrl(Uri.parse(url));
+        final req  = await client.getUrl(Uri.parse(url));
         req.headers.set('Accept', 'multipart/x-mixed-replace');
         final resp = await req.close();
 
-        if (resp.statusCode != 200) {
-          await Future.delayed(reconnectDelay);
-          continue;
+        if (resp.statusCode == 200) {
+          // Find the boundary string from Content-Type header
+          final ct = resp.headers.value('content-type') ?? '';
+          final boundary = _parseBoundary(ct);
+          if (boundary != null) await _parseMjpeg(resp, boundary);
         }
-
-        // Find the boundary string from Content-Type header
-        final ct = resp.headers.value('content-type') ?? '';
-        final boundary = _parseBoundary(ct);
-        if (boundary == null) {
-          await Future.delayed(reconnectDelay);
-          continue;
-        }
-
-        await _parseMjpeg(resp, boundary);
       } catch (_) {
-        // Server not up yet — wait and retry
+        // Server not up yet / not a valid MJPEG stream — wait and retry.
+      } finally {
+        // Always tear down the client so a poisoned pooled connection is never
+        // reused on the next attempt (and we don't leak one per retry).
+        client?.close(force: true);
+        if (identical(_client, client)) _client = null;
       }
 
       if (!_closed) await Future.delayed(reconnectDelay);
