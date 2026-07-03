@@ -31,6 +31,7 @@ class AppSettings extends ChangeNotifier {
   static const _kMockEeg = 'mock_eeg';
   static const _kSessionsRoot = 'sessions_root';
   static const _kProtocolsRoot = 'protocols_root';
+  static const _kExercisesRoot = 'exercises_root';
   static const _kWsUri = 'ws_uri';
   static const _kLastPatientId = 'last_patient_id';
   static const _kDarkMode = 'dark_mode';
@@ -55,6 +56,7 @@ class AppSettings extends ChangeNotifier {
 
   String sessionsRoot = '';
   String protocolsRoot = '';
+  String exercisesRoot = '';
   String wsUri = 'ws://localhost:8765';
   String lastPatientId = '';
   bool darkMode = false;
@@ -78,6 +80,13 @@ class AppSettings extends ChangeNotifier {
     return '$home\\AppData\\LocalLow\\DefaultCompany\\Smart Game\\Protocols';
   }
 
+  /// Authored exercises (recorded skeleton-avatar clips + uploaded media) live
+  /// in a sibling `Exercises` folder by default.
+  static String defaultExercisesRoot() {
+    final home = Platform.environment['USERPROFILE'] ?? '';
+    return '$home\\AppData\\LocalLow\\DefaultCompany\\Smart Game\\Exercises';
+  }
+
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     final p = _prefs!;
@@ -93,6 +102,7 @@ class AppSettings extends ChangeNotifier {
     mockEeg = p.getBool(_kMockEeg) ?? false;
     sessionsRoot = p.getString(_kSessionsRoot) ?? defaultSessionsRoot();
     protocolsRoot = p.getString(_kProtocolsRoot) ?? defaultProtocolsRoot();
+    exercisesRoot = p.getString(_kExercisesRoot) ?? defaultExercisesRoot();
     wsUri = p.getString(_kWsUri) ?? 'ws://localhost:8765';
     lastPatientId = p.getString(_kLastPatientId) ?? '';
     darkMode = p.getBool(_kDarkMode) ?? false;
@@ -195,6 +205,11 @@ class AppSettings extends ChangeNotifier {
   void setProtocolsRoot(String v) {
     protocolsRoot = v;
     _save((p) => p.setString(_kProtocolsRoot, v));
+  }
+
+  void setExercisesRoot(String v) {
+    exercisesRoot = v;
+    _save((p) => p.setString(_kExercisesRoot, v));
   }
 
   void setWsUri(String v) {

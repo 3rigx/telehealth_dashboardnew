@@ -52,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onReplay: () => Navigator.pushNamed(context, '/replay'),
               onPrediction: () => setState(() => _setupMode = 'Prediction'),
               onProtocols: () => Navigator.pushNamed(context, '/protocols'),
+              onExercises: () => Navigator.pushNamed(context, '/exercises'),
               onSettings: () => Navigator.pushNamed(context, '/settings'),
               activeMode: _setupMode,
             ),
@@ -76,13 +77,15 @@ class _HomeScreenState extends State<HomeScreen> {
 // ── left rail ─────────────────────────────────────────────────────────────────
 
 class _LeftRail extends StatelessWidget {
-  final VoidCallback onExercise, onReplay, onPrediction, onProtocols, onSettings;
+  final VoidCallback onExercise, onReplay, onPrediction, onProtocols,
+      onExercises, onSettings;
   final String? activeMode;
   const _LeftRail({
     required this.onExercise,
     required this.onReplay,
     required this.onPrediction,
     required this.onProtocols,
+    required this.onExercises,
     required this.onSettings,
     this.activeMode,
   });
@@ -167,6 +170,15 @@ class _LeftRail extends StatelessWidget {
             color: AppColors.accentCyan,
             onTap: onProtocols,
             delay: 200,
+          ),
+          const SizedBox(height: 10),
+          _NavCard(
+            icon: Icons.directions_run_outlined,
+            title: 'Exercises',
+            subtitle: 'Record & manage exercise\nguides (avatar)',
+            color: const Color(0xFFD98AB0),
+            onTap: onExercises,
+            delay: 240,
           ),
           const SizedBox(height: 10),
           _NavCard(

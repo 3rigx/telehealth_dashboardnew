@@ -11,6 +11,7 @@ import '../../services/protocol_runner.dart';
 import '../../services/signal_quality.dart';
 import '../../services/unity_connection_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/avatar_guide_player.dart';
 import '../../widgets/eeg_channel_map.dart';
 import '../../widgets/foot_heatmap.dart';
 import '../../widgets/sensor_warmup_loader.dart';
@@ -71,7 +72,6 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
   }
 
   void _onSensor() {
-    _runner.feedSensor(_conn!.state);
     if (mounted) setState(() {});
   }
 
@@ -441,7 +441,14 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
           const SizedBox(height: 10),
           _hintPill(Icons.record_voice_over, 'Count out loud'),
         ],
-        if (cls != null && cls.animationPath.isNotEmpty) ...[
+        if (cls != null && cls.exerciseId.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          SizedBox(
+            width: 220,
+            height: 220,
+            child: AvatarExerciseGuide(exerciseId: cls.exerciseId),
+          ),
+        ] else if (cls != null && cls.animationPath.isNotEmpty) ...[
           const SizedBox(height: 22),
           _refAnimation(cls),
         ],
@@ -507,8 +514,6 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
         Row(mainAxisSize: MainAxisSize.min, children: [
           _stat('${_runner.totalBlocks}', 'blocks'),
           const SizedBox(width: 28),
-          _stat('${_runner.totalReps}', 'total reps'),
-          const SizedBox(width: 28),
           _stat(_fmt(widget.protocol.estimatedDuration), 'planned'),
         ]),
         if (_ctrl?.savedFolder != null) ...[
@@ -547,21 +552,27 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
   Widget _activeView(TelerehabState state, ProtocolClass? cls, Color accent) {
     final g = widget.protocol.globalFeedback;
     final fb = cls?.feedback ?? ClassFeedback();
-    final showRep = g && fb.repCounter;
     final showMirror = g && fb.movementMirror;
     final showPressure = g && fb.pressureIndicator && !_hidePressure;
     final showEeg = g && fb.eegFeedback && !_hideEeg;
 
-    final hasGuide = (cls?.animationPath ?? '').isNotEmpty;
+    final exId = cls?.exerciseId ?? '';
+    final hasGif = (cls?.animationPath ?? '').isNotEmpty;
+    final hasGuide = exId.isNotEmpty || hasGif;
 
-    // Large panels: the looping exercise-guide GIF and the live movement mirror.
+    // Large panels: the looping exercise guide (recorded avatar, or GIF
+    // fallback) and the live movement mirror.
     final primary = <Widget>[
-      if (hasGuide) _panel('Exercise guide', _guidePlayer(cls!)),
+      if (hasGuide)
+        _panel(
+            'Exercise guide',
+            exId.isNotEmpty
+                ? AvatarExerciseGuide(exerciseId: exId)
+                : _guidePlayer(cls!)),
       if (showMirror) _panel('Movement Mirror', _mirror(state)),
     ];
     // Compact side cards.
     final side = <Widget>[
-      if (showRep) _repCard(accent),
       if (showPressure) _pressureCard(state),
       if (showEeg) _eegCard(state),
     ];
@@ -654,9 +665,6 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
 
   Widget _mirror(TelerehabState state) =>
       Skeleton3DView(skeleton: state.skeleton ?? Skeleton3D.seatedDemo(kneeAngleDeg: 50));
-
-  Widget _repCard(Color accent) =>
-      _panel('Repetitions', Center(child: _RepGauge(reps: _runner.reps, accent: accent)));
 
   Widget _pressureCard(TelerehabState state) {
     final p = state.plantar;
@@ -852,115 +860,5 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
     final m = d.inMinutes;
     final s = d.inSeconds % 60;
     return '${m}m ${s.toString().padLeft(2, '0')}s';
-  }
-}
-
-/// Gamified rep counter: a progress ring that fills every [_milestone] reps
-/// (a "level"), a number that pops on each rep, a flame streak for completed
-/// sets, and an escalating cheer at each milestone.
-class _RepGauge extends StatefulWidget {
-  final int reps;
-  final Color accent;
-  const _RepGauge({required this.reps, required this.accent});
-
-  @override
-  State<_RepGauge> createState() => _RepGaugeState();
-}
-
-class _RepGaugeState extends State<_RepGauge> with SingleTickerProviderStateMixin {
-  static const _milestone = 5;
-  late final AnimationController _pop;
-  String _cheer = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _pop = AnimationController(vsync: this, duration: const Duration(milliseconds: 320));
-  }
-
-  @override
-  void didUpdateWidget(covariant _RepGauge old) {
-    super.didUpdateWidget(old);
-    if (widget.reps > old.reps) {
-      _pop.forward(from: 0); // pop on each new rep
-      _cheer = (widget.reps % _milestone == 0) ? _cheerFor(widget.reps) : '';
-    } else if (widget.reps < old.reps) {
-      _cheer = ''; // reps reset → new block
-    }
-  }
-
-  @override
-  void dispose() {
-    _pop.dispose();
-    super.dispose();
-  }
-
-  static String _cheerFor(int n) => switch (n) {
-        5 => 'Nice! 🔥',
-        10 => 'Great! 🔥🔥',
-        15 => 'On fire! 🔥🔥🔥',
-        20 => 'Unstoppable!',
-        _ => '$n in a row!',
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    final reps = widget.reps;
-    final completed = reps ~/ _milestone;
-    final within = reps % _milestone;
-    final ring = reps == 0 ? 0.0 : (within == 0 ? 1.0 : within / _milestone);
-
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      SizedBox(
-        width: 170,
-        height: 170,
-        child: Stack(alignment: Alignment.center, children: [
-          SizedBox(
-            width: 170,
-            height: 170,
-            child: CircularProgressIndicator(
-              value: ring,
-              strokeWidth: 11,
-              backgroundColor: AppColors.inkSurfaceAlt,
-              valueColor: AlwaysStoppedAnimation(widget.accent),
-            ),
-          ),
-          AnimatedBuilder(
-            animation: _pop,
-            builder: (context, _) {
-              final scale = 1 + 0.3 * (1 - Curves.easeOut.transform(_pop.value));
-              return Transform.scale(
-                scale: scale,
-                child: Text('$reps',
-                    style: GoogleFonts.schibstedGrotesk(
-                        color: AppColors.inkText,
-                        fontSize: 68,
-                        fontWeight: FontWeight.w800,
-                        height: 1)),
-              );
-            },
-          ),
-        ]),
-      ),
-      const SizedBox(height: 10),
-      if (completed > 0)
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          for (var i = 0; i < (completed > 6 ? 6 : completed); i++)
-            const Icon(Icons.local_fire_department, size: 18, color: AppColors.accentOrange),
-          if (completed > 6)
-            Padding(
-              padding: const EdgeInsets.only(left: 2),
-              child: Text('×$completed',
-                  style: GoogleFonts.schibstedGrotesk(
-                      color: AppColors.accentOrange, fontSize: 12, fontWeight: FontWeight.w700)),
-            ),
-        ]),
-      const SizedBox(height: 4),
-      Text(_cheer.isNotEmpty ? _cheer : 'reps this block',
-          style: GoogleFonts.schibstedGrotesk(
-              color: _cheer.isNotEmpty ? widget.accent : AppColors.inkMuted,
-              fontSize: 13,
-              fontWeight: _cheer.isNotEmpty ? FontWeight.w700 : FontWeight.w400)),
-    ]);
   }
 }

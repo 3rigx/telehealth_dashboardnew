@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/protocol.dart';
-import '../models/telerehab_state.dart';
-import 'rep_analysis.dart';
 
 /// Phase of a single block. Every block is instruction → active → reset; a
 /// researcher-triggered comfort [pause] can freeze the run between/within
@@ -73,30 +71,9 @@ class RunMarker {
           : s;
 }
 
-/// Active-phase windows for post-hoc analysis (e.g. rep recompute): each
-/// `active` marker spans until the next marker. [offsetMs] shifts the times
-/// onto the same clock as the recorded sensor samples (Unity's record clock).
-List<({int startMs, int endMs, int block})> activeWindowsFromMarkers(
-  List<RunMarker> markers, {
-  int offsetMs = 0,
-}) {
-  final out = <({int startMs, int endMs, int block})>[];
-  for (var i = 0; i < markers.length; i++) {
-    if (markers[i].event != 'active') continue;
-    final end = i + 1 < markers.length ? markers[i + 1].tMs : markers[i].tMs;
-    out.add((
-      startMs: markers[i].tMs - offsetMs,
-      endMs: end - offsetMs,
-      block: markers[i].block,
-    ));
-  }
-  return out;
-}
-
-/// Drives a protocol run on the Flutter side: builds the block sequence, runs
-/// the instruction/active/reset clock, and counts repetitions from the live
-/// sensor stream. Phase 2 keeps this entirely local (rehearsal); Phase 3 wires
-/// its phase transitions to Unity (start/stop recording + block markers).
+/// Drives a protocol run on the Flutter side: builds the block sequence and
+/// runs the instruction/active/reset clock, emitting block/phase markers. On a
+/// live run its phase transitions drive Unity (start/stop recording + markers).
 class ProtocolRunner extends ChangeNotifier {
   Protocol? protocol;
   List<String> sequence = const [];
@@ -106,8 +83,6 @@ class ProtocolRunner extends ChangeNotifier {
   RunPhase phase = RunPhase.idle;
   RunPhase _resumePhase = RunPhase.instruction;
   double phaseElapsed = 0; // seconds
-  int reps = 0; // reps in the current active block
-  int _repsAccum = 0; // reps across completed blocks
 
   /// Timestamped event log for the run (written to markers.csv on a live run).
   final List<RunMarker> markers = [];
@@ -119,11 +94,6 @@ class ProtocolRunner extends ChangeNotifier {
 
   Timer? _timer;
 
-  // Rep detector (seated leg extension): hysteresis on the knee flexion angle.
-  // Shared with the post-hoc recompute over the recorded file so the live
-  // display and the canonical count use identical logic.
-  final KneeRepCounter _repCounter = KneeRepCounter();
-
   // ── derived state ─────────────────────────────────────────────────────────
 
   bool get isRunning => phase != RunPhase.idle && phase != RunPhase.done;
@@ -131,7 +101,6 @@ class ProtocolRunner extends ChangeNotifier {
   bool get isDone => phase == RunPhase.done;
   int get totalBlocks => sequence.length;
   int get blockNumber => blockIndex + 1;
-  int get totalReps => _repsAccum + (phase == RunPhase.active ? reps : 0);
 
   /// Elapsed run time in ms on the same clock the markers use — lets the run
   /// controller timestamp the clock-offset ping/pong against the marker clock.
@@ -177,9 +146,6 @@ class ProtocolRunner extends ChangeNotifier {
     this.seed = seed ?? (DateTime.now().millisecondsSinceEpoch & 0x7fffffff);
     sequence = p.generateSequence(seed: this.seed);
     blockIndex = 0;
-    reps = 0;
-    _repsAccum = 0;
-    _repCounter.reset();
     phaseElapsed = 0;
     markers.clear();
     _watch
@@ -230,15 +196,12 @@ class ProtocolRunner extends ChangeNotifier {
   /// Jump straight to the next block (or finish if on the last).
   void skipBlock() {
     if (phase == RunPhase.idle || phase == RunPhase.done) return;
-    if (phase == RunPhase.active) _repsAccum += reps;
     if (blockIndex >= sequence.length - 1) {
       _finish();
     } else {
       blockIndex++;
       phase = RunPhase.instruction;
       phaseElapsed = 0;
-      reps = 0;
-      _repCounter.reset();
       _mark('instruction');
     }
     notifyListeners();
@@ -273,12 +236,9 @@ class ProtocolRunner extends ChangeNotifier {
       case RunPhase.instruction:
         phase = RunPhase.active;
         phaseElapsed = 0;
-        reps = 0;
-        _repCounter.reset();
         _mark('active');
         break;
       case RunPhase.active:
-        _repsAccum += reps;
         phase = RunPhase.reset;
         phaseElapsed = 0;
         _mark('reset');
@@ -296,25 +256,6 @@ class ProtocolRunner extends ChangeNotifier {
       default:
         break;
     }
-  }
-
-  // ── rep counting from the live sensor stream ────────────────────────────────
-
-  /// Called by the participant screen on each sensor update. Only counts during
-  /// the active phase. Does not notify (the screen rebuilds on its own).
-  void feedSensor(TelerehabState s) {
-    if (phase != RunPhase.active) return;
-    final angle = _kneeAngle(s);
-    if (angle == null) return;
-    _repCounter.feed(angle);
-    reps = _repCounter.count;
-  }
-
-  double? _kneeAngle(TelerehabState s) {
-    for (final j in s.jointAngles) {
-      if (j.name.toLowerCase().contains('knee')) return j.angle;
-    }
-    return s.skeleton?.activeAngle;
   }
 
   @override

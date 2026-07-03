@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import '../models/protocol.dart';
 import 'app_settings.dart';
 import 'protocol_runner.dart';
-import 'rep_analysis.dart';
 import 'signal_quality.dart';
 import 'unity_connection_service.dart';
 
@@ -252,12 +251,14 @@ class ProtocolRunController extends ChangeNotifier {
     clockRttMs = null;
     _pingSentAt.clear();
     _pingSeq = 0;
-    // A handful of pings ~150 ms apart; keep the offset from the lowest-RTT
-    // reply (least jitter), NTP-style. The first ping is delayed one tick so
-    // start_recording has certainly been processed and Unity's clock is live.
+    // Ping repeatedly over the first ~12 s and keep the offset from the
+    // lowest-RTT reply (NTP-style). Unity's main thread is busiest right at
+    // recording start (scene + first frames), which inflates RTT and biases the
+    // estimate — so we sample well past that and stop early once a clean
+    // (<15 ms) localhost round trip gives a trustworthy offset.
     var sent = 0;
-    _pingTimer = Timer.periodic(const Duration(milliseconds: 150), (t) {
-      if (sent >= 5 || stage != RunStage.recording) {
+    _pingTimer = Timer.periodic(const Duration(milliseconds: 400), (t) {
+      if (sent >= 30 || stage != RunStage.recording) {
         t.cancel();
         return;
       }
@@ -280,6 +281,11 @@ class ProtocolRunController extends ChangeNotifier {
     // in the Flutter run clock that instant was ≈ sentAt + rtt/2. The offset is
     // how far the Flutter clock leads Unity's record clock.
     clockOffsetMs = (sentAt + rtt ~/ 2) - unityRecMs;
+    // A clean localhost round trip means the offset is accurate — stop pinging.
+    if (rtt < 15) {
+      _pingTimer?.cancel();
+      _pingTimer = null;
+    }
   }
 
   void pause() => runner.pause();
@@ -340,19 +346,6 @@ class ProtocolRunController extends ChangeNotifier {
       await File('$folder${sep}protocol.json')
           .writeAsString(const JsonEncoder.withIndent('  ').convert(protocol.toJson()));
 
-      // Canonical reps: recompute from the recorded skeleton (authoritative),
-      // scoped to each active window; fall back to the live count if the
-      // recording can't be analysed (e.g. no skeleton captured).
-      RepAnalysis? analysis;
-      try {
-        final windows =
-            activeWindowsFromMarkers(runner.markers, offsetMs: offset);
-        analysis = await recomputeRepsFromRecording(folder, windows);
-      } catch (e) {
-        debugPrint('[ProtocolRun] rep recompute failed: $e');
-      }
-      final canonicalReps = analysis?.totalReps ?? runner.totalReps;
-
       final run = {
         'participantId': participantId,
         'protocolId': protocol.id,
@@ -364,14 +357,6 @@ class ProtocolRunController extends ChangeNotifier {
           for (final id in runner.sequence)
             {'classId': id, 'className': protocol.classById(id)?.name ?? ''}
         ],
-        // Reps recomputed from the saved skeleton, not the live display stream.
-        'reps': canonicalReps,
-        'totalReps': canonicalReps, // back-compat alias
-        'repsSource': analysis != null ? 'recorded_skeleton' : 'live_stream',
-        'liveReps': runner.totalReps, // what the participant saw live
-        'repsByBlock': analysis == null
-            ? null
-            : {for (final e in analysis.repsByBlock.entries) '${e.key}': e.value},
         // Flutter↔Unity clock alignment (null offset = handshake didn't confirm,
         // marker times left on the raw Flutter run clock).
         'clockOffsetMs': clockOffsetMs,
@@ -385,9 +370,7 @@ class ProtocolRunController extends ChangeNotifier {
 
       savedFolder = folder;
       _cleanupPending(); // final markers are safely in the session folder now
-      final repNote =
-          analysis != null ? ' · $canonicalReps reps (from recording)' : '';
-      _set(RunStage.done, 'Saved to $folder$repNote');
+      _set(RunStage.done, 'Saved to $folder');
     } catch (e) {
       _set(RunStage.error, 'Recording saved, but writing protocol files failed: $e');
     }

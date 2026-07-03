@@ -4,8 +4,10 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/exercise_asset.dart';
 import '../../models/protocol.dart';
 import '../../services/app_settings.dart';
+import '../../services/exercise_repository.dart';
 import '../../services/protocol_repository.dart';
 import '../../services/protocol_run_controller.dart';
 import '../../services/unity_connection_service.dart';
@@ -982,6 +984,45 @@ class _ClassCard extends StatelessWidget {
         ),
         const SizedBox(height: 10),
 
+        // exercise guide (authored avatar) — the block's reference movement
+        _miniLabel('EXERCISE GUIDE (AVATAR)'),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text(
+              cls.exerciseId.isEmpty
+                  ? 'None'
+                  : (cls.exerciseType.isEmpty ? 'Selected' : cls.exerciseType),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.schibstedGrotesk(
+                  color: cls.exerciseId.isEmpty
+                      ? AppColors.textSecondary
+                      : AppColors.textPrimary,
+                  fontSize: 11),
+            ),
+          ),
+          if (cls.exerciseId.isNotEmpty)
+            InkWell(
+              onTap: () => onEdit(() => cls.exerciseId = ''),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Icon(Icons.clear, size: 14, color: AppColors.textSecondary),
+              ),
+            ),
+          TextButton.icon(
+            onPressed: () => _pickExercise(context, cls, onEdit),
+            icon: const Icon(Icons.directions_run, size: 14),
+            label: const Text('Choose'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.accent,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              textStyle: GoogleFonts.schibstedGrotesk(fontSize: 11),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 10),
+
         // instruction
         _miniLabel('INSTRUCTION'),
         const SizedBox(height: 4),
@@ -1096,8 +1137,6 @@ class _ClassCard extends StatelessWidget {
           ],
         ]),
         const SizedBox(height: 6),
-        _fbRow(Icons.numbers, 'Repetition Counter', cls.feedback.repCounter,
-            (v) => onEdit(() => cls.feedback.repCounter = v)),
         _fbRow(Icons.accessibility_new, 'Movement Mirror', cls.feedback.movementMirror,
             (v) => onEdit(() => cls.feedback.movementMirror = v)),
         _fbRow(Icons.compare_arrows, 'Pressure Indicator', cls.feedback.pressureIndicator,
@@ -1116,6 +1155,42 @@ class _ClassCard extends StatelessWidget {
     );
     final path = result?.files.single.path;
     if (path != null) onEdit(() => cls.animationPath = path);
+  }
+
+  /// Pick an authored exercise (avatar guide) from the library for this class.
+  Future<void> _pickExercise(
+      BuildContext context, ProtocolClass cls, void Function(VoidCallback) onEdit) async {
+    final repo = context.read<ExerciseRepository>();
+    if (repo.exercises.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'No exercises yet — record one in the Exercises section first.')));
+      return;
+    }
+    final chosen = await showDialog<ExerciseAsset>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose an exercise guide'),
+        children: [
+          for (final e in repo.exercises)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(e),
+              child: Row(children: [
+                Icon(e.isRecorded ? Icons.animation : Icons.gif_box_outlined,
+                    size: 16, color: AppColors.accent),
+                const SizedBox(width: 10),
+                Expanded(child: Text(e.name)),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (chosen != null) {
+      onEdit(() {
+        cls.exerciseId = chosen.id;
+        cls.exerciseType = chosen.name;
+      });
+    }
   }
 
   Widget _fbRow(IconData icon, String label, bool value, ValueChanged<bool> onChanged) {

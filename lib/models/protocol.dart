@@ -58,29 +58,25 @@ extension BlockOrderModeX on BlockOrderMode {
 /// Participant-visible feedback for a class. Gated globally by
 /// [Protocol.globalFeedback] (the master switch).
 class ClassFeedback {
-  bool repCounter;
   bool movementMirror;
   bool pressureIndicator;
   bool eegFeedback;
 
   ClassFeedback({
-    this.repCounter = false,
     this.movementMirror = false,
     this.pressureIndicator = false,
     this.eegFeedback = false,
   });
 
-  bool get any => repCounter || movementMirror || pressureIndicator || eegFeedback;
+  bool get any => movementMirror || pressureIndicator || eegFeedback;
 
   Map<String, dynamic> toJson() => {
-        'repCounter': repCounter,
         'movementMirror': movementMirror,
         'pressureIndicator': pressureIndicator,
         'eegFeedback': eegFeedback,
       };
 
   factory ClassFeedback.fromJson(Map<String, dynamic> j) => ClassFeedback(
-        repCounter: j['repCounter'] ?? false,
         movementMirror: j['movementMirror'] ?? false,
         pressureIndicator: j['pressureIndicator'] ?? false,
         eegFeedback: j['eegFeedback'] ?? false,
@@ -97,8 +93,9 @@ class ProtocolClass {
   int colorValue;
   String baseToken; // one of kBaseTokens — keeps the capture pipeline compatible
   String instruction;
-  String exerciseType; // per-class (e.g. "Seated Leg Extensions")
-  String animationPath; // per-class reference GIF/MP4 (may be empty)
+  String exerciseType; // per-class display name (e.g. "Seated Leg Extensions")
+  String exerciseId; // -> authored ExerciseAsset (avatar guide); may be empty
+  String animationPath; // per-class reference GIF/MP4 fallback (may be empty)
   bool cognitivePrompt; // shows "count out loud"-style note on participant screen
 
   // Per-class block timing (seconds). Each class controls its own block length
@@ -116,6 +113,7 @@ class ProtocolClass {
     this.baseToken = 'Motion',
     this.instruction = '',
     this.exerciseType = '',
+    this.exerciseId = '',
     this.animationPath = '',
     this.cognitivePrompt = false,
     this.instructionSec = 2,
@@ -133,6 +131,7 @@ class ProtocolClass {
         'baseToken': baseToken,
         'instruction': instruction,
         'exerciseType': exerciseType,
+        'exerciseId': exerciseId,
         'animationPath': animationPath,
         'cognitivePrompt': cognitivePrompt,
         'instructionSec': instructionSec,
@@ -156,6 +155,7 @@ class ProtocolClass {
         baseToken: j['baseToken'] ?? 'Motion',
         instruction: j['instruction'] ?? '',
         exerciseType: j['exerciseType'] ?? '',
+        exerciseId: j['exerciseId'] ?? '',
         animationPath: j['animationPath'] ?? '',
         cognitivePrompt: j['cognitivePrompt'] ?? false,
         instructionSec: (j['instructionSec'] ?? defInstruction).toDouble(),
@@ -391,7 +391,7 @@ class Protocol {
             instruction: 'Do seated leg extensions continuously.',
             exerciseType: 'Seated Leg Extensions',
             feedback: ClassFeedback(
-                repCounter: true, movementMirror: true, pressureIndicator: true),
+                movementMirror: true, pressureIndicator: true),
           ),
           ProtocolClass(
             id: genId('c'),
@@ -402,7 +402,7 @@ class Protocol {
             exerciseType: 'Seated Leg Extensions',
             cognitivePrompt: true,
             feedback: ClassFeedback(
-                repCounter: true, movementMirror: true, pressureIndicator: true),
+                movementMirror: true, pressureIndicator: true),
           ),
         ],
       );

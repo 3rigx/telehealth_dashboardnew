@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/app_settings.dart';
+import 'services/exercise_repository.dart';
 import 'services/protocol_repository.dart';
 import 'services/replay_engine.dart';
 import 'services/session_repository.dart';
 import 'services/unity_connection_service.dart';
 import 'services/unity_launch_service.dart';
 import 'theme/app_theme.dart';
+import 'screens/exercises/exercise_library_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/live_monitor/live_monitor_screen.dart';
 import 'screens/protocol/protocol_builder_screen.dart';
@@ -23,6 +25,8 @@ Future<void> main() async {
 
   final protocols = ProtocolRepository()..setRoot(settings.protocolsRoot);
 
+  final exercises = ExerciseRepository()..setRoot(settings.exercisesRoot);
+
   final connection = UnityConnectionService()
     ..setMocks(
       motion: settings.mockMotion,
@@ -36,6 +40,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: settings),
         ChangeNotifierProvider.value(value: repository),
         ChangeNotifierProvider.value(value: protocols),
+        ChangeNotifierProvider.value(value: exercises),
         ChangeNotifierProvider.value(value: connection),
         ChangeNotifierProvider(create: (_) => UnityLaunchService()),
         ChangeNotifierProvider(create: (_) => ReplayEngine()),
@@ -61,6 +66,7 @@ class TelerehabApp extends StatelessWidget {
         '/': (_) => const HomeScreen(),
         '/monitor': (_) => const LiveMonitorScreen(),
         '/protocols': (_) => const ProtocolBuilderScreen(),
+        '/exercises': (_) => const ExerciseLibraryScreen(),
         '/replay': (_) => const ReplayScreen(),
         '/settings': (_) => const SettingsScreen(),
       },
