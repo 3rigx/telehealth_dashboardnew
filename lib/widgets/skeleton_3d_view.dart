@@ -2,7 +2,10 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+import '../models/avatar_style.dart';
 import '../models/skeleton_3d.dart';
+import '../services/app_settings.dart';
 import '../theme/app_theme.dart';
 
 /// Interactive 3D telemetry view of a [Skeleton3D].
@@ -11,7 +14,8 @@ import '../theme/app_theme.dart';
 /// 3D engine — a body is only ~18 points and ~17 bones, so a CustomPainter is
 /// faster and fully controllable). Supports:
 ///   • drag to orbit, mouse-wheel to zoom
-///   • depth-shaded bones (nearer = brighter) with painter's-algorithm sorting
+///   • a solid body: tapered depth-shaded limb capsules + lit joint spheres,
+///     nearer = brighter, painter's-algorithm sorted
 ///   • a 3D angle arc drawn at the active joint
 ///   • a faint "target pose" ghost shin showing the clinical goal
 ///   • idle auto-rotate that pauses while the user interacts
@@ -23,11 +27,16 @@ class Skeleton3DView extends StatefulWidget {
   final double? targetMin;
   final double? targetMax;
 
+  /// Figure style. When null (the usual case) the user's Settings choice is
+  /// used; pass an explicit value to force a look (e.g. the settings preview).
+  final AvatarStyle? style;
+
   const Skeleton3DView({
     super.key,
     required this.skeleton,
     this.targetMin,
     this.targetMax,
+    this.style,
   });
 
   @override
@@ -77,6 +86,7 @@ class _Skeleton3DViewState extends State<Skeleton3DView>
 
   @override
   Widget build(BuildContext context) {
+    final style = widget.style ?? context.watch<AppSettings>().avatarStyle;
     return Listener(
       onPointerSignal: (e) {
         if (e is PointerScrollEvent) {
@@ -98,6 +108,7 @@ class _Skeleton3DViewState extends State<Skeleton3DView>
               yaw: _yaw,
               pitch: _pitch,
               zoom: _zoom,
+              style: style,
               targetMin: widget.targetMin,
               targetMax: widget.targetMax,
             ),
@@ -205,15 +216,36 @@ class _P {
 class _Skeleton3DPainter extends CustomPainter {
   final Skeleton3D skeleton;
   final double yaw, pitch, zoom;
+  final AvatarStyle style;
   final double? targetMin, targetMax;
 
   static const double _camDist = 3.2;
+
+  /// World-space limb thickness (radius, in the same metres as the joints) used
+  /// to draw the figure as a solid body rather than thin sticks. Torso/head are
+  /// bulky, limbs taper toward the extremities. Projected perspective-correctly,
+  /// so it scales with zoom/distance like the rest of the figure.
+  static const Map<String, double> _girth = {
+    'pelvis': 0.100,
+    'chest': 0.115,
+    'neck': 0.050,
+    'head': 0.100,
+    'shoulderL': 0.062, 'shoulderR': 0.062,
+    'elbowL': 0.046, 'elbowR': 0.046,
+    'wristL': 0.032, 'wristR': 0.032,
+    'hipL': 0.078, 'hipR': 0.078,
+    'kneeL': 0.056, 'kneeR': 0.056,
+    'ankleL': 0.042, 'ankleR': 0.042,
+    'toeL': 0.030, 'toeR': 0.030,
+  };
+  static double _girthOf(String name) => _girth[name] ?? 0.050;
 
   const _Skeleton3DPainter({
     required this.skeleton,
     required this.yaw,
     required this.pitch,
     required this.zoom,
+    required this.style,
     this.targetMin,
     this.targetMax,
   });
@@ -271,22 +303,59 @@ class _Skeleton3DPainter extends CustomPainter {
     // ── target-pose ghost (drawn behind the live skeleton) ─────────────
     _drawTargetGhost(canvas, project);
 
-    // ── bones, far-to-near (painter's algorithm) ───────────────────────
+    // ── the body itself, in the user-selected style ───────────────────
+    // Every style renders the same projected joints; only the look differs.
+    switch (style) {
+      case AvatarStyle.lines:
+        _styleLines(canvas, pts, shade, activeColor);
+      case AvatarStyle.mannequin:
+        _styleMannequin(canvas, pts, shade, activeColor, focal);
+      case AvatarStyle.neon:
+        _styleNeon(canvas, pts, shade, activeColor, focal);
+      case AvatarStyle.blocky:
+        _styleBlocky(canvas, pts, shade, activeColor, focal);
+      case AvatarStyle.cartoon:
+        _styleCartoon(canvas, pts, shade, activeColor, focal);
+    }
+
+    // ── 3D angle arc at the active joint ───────────────────────────────
+    _drawAngleArc(canvas, project, activeColor);
+  }
+
+  // Bones sorted far-to-near (painter's algorithm) for the current camera.
+  List<Bone> _sortedBones(Map<String, _P> pts) {
     final bones = [...skeleton.bones];
     bones.sort((a, b) {
       final da = ((pts[a.a]?.depth ?? 0) + (pts[a.b]?.depth ?? 0)) / 2;
       final db = ((pts[b.a]?.depth ?? 0) + (pts[b.b]?.depth ?? 0)) / 2;
       return db.compareTo(da);
     });
+    return bones;
+  }
 
-    for (final bone in bones) {
+  // Joints sorted far-to-near so nearer ones paint on top.
+  List<MapEntry<String, _P>> _sortedJoints(Map<String, _P> pts) =>
+      pts.entries.toList()
+        ..sort((a, b) => b.value.depth.compareTo(a.value.depth));
+
+  // Screen-space unit direction + perpendicular for a bone; null if degenerate.
+  ({Offset u, Offset n})? _axis(Offset a, Offset b) {
+    final dir = b - a;
+    final len = dir.distance;
+    if (len < 0.001) return null;
+    final u = dir / len;
+    return (u: u, n: Offset(-u.dy, u.dx));
+  }
+
+  // ── Style: LINES — the classic thin stickman ─────────────────────────
+  void _styleLines(Canvas canvas, Map<String, _P> pts,
+      double Function(double) shade, Color activeColor) {
+    for (final bone in _sortedBones(pts)) {
       final pa = pts[bone.a], pb = pts[bone.b];
       if (pa == null || pb == null) continue;
       final t = (shade(pa.depth) + shade(pb.depth)) / 2;
       final base = bone.active ? activeColor : AppColors.accent;
       final col = Color.lerp(base.withValues(alpha: 0.30), base, t)!;
-
-      // soft glow under the line
       canvas.drawLine(
         pa.s,
         pb.s,
@@ -304,25 +373,15 @@ class _Skeleton3DPainter extends CustomPainter {
           ..strokeCap = StrokeCap.round,
       );
     }
-
-    // ── joints ─────────────────────────────────────────────────────────
-    final ordered = pts.entries.toList()
-      ..sort((a, b) => b.value.depth.compareTo(a.value.depth));
-    for (final e in ordered) {
+    for (final e in _sortedJoints(pts)) {
       final t = shade(e.value.depth);
       final isActive = e.key == skeleton.activeJoint;
       final r = (isActive ? 7.0 : 4.0) * (0.7 + 0.3 * t);
       final col = isActive ? activeColor : AppColors.accentCyan;
       canvas.drawCircle(
-        e.value.s,
-        r + 3,
-        Paint()..color = col.withValues(alpha: 0.16 * t),
-      );
-      canvas.drawCircle(
-        e.value.s,
-        r,
-        Paint()..color = Color.lerp(col.withValues(alpha: 0.4), col, t)!,
-      );
+          e.value.s, r + 3, Paint()..color = col.withValues(alpha: 0.16 * t));
+      canvas.drawCircle(e.value.s, r,
+          Paint()..color = Color.lerp(col.withValues(alpha: 0.4), col, t)!);
       canvas.drawCircle(
         e.value.s,
         r,
@@ -332,9 +391,349 @@ class _Skeleton3DPainter extends CustomPainter {
           ..strokeWidth = 1.1,
       );
     }
+  }
 
-    // ── 3D angle arc at the active joint ───────────────────────────────
-    _drawAngleArc(canvas, project, activeColor);
+  // ── Style: MANNEQUIN — solid tapered capsules + lit spheres ──────────
+  void _styleMannequin(Canvas canvas, Map<String, _P> pts,
+      double Function(double) shade, Color activeColor, double focal) {
+    const shadow = Color(0xFF0A1120);
+    for (final bone in _sortedBones(pts)) {
+      final pa = pts[bone.a], pb = pts[bone.b];
+      if (pa == null || pb == null) continue;
+      final ax = _axis(pa.s, pb.s);
+      if (ax == null) continue;
+      final t = (shade(pa.depth) + shade(pb.depth)) / 2;
+      final base = bone.active ? activeColor : AppColors.accent;
+      final col = Color.lerp(Color.lerp(base, shadow, 0.45)!, base, t)!;
+      final rA = _girthOf(bone.a) * focal / max(pa.depth, 0.1);
+      final rB = _girthOf(bone.b) * focal / max(pb.depth, 0.1);
+      final n = ax.n;
+      final capsule = Path()
+        ..moveTo(pa.s.dx + n.dx * rA, pa.s.dy + n.dy * rA)
+        ..lineTo(pb.s.dx + n.dx * rB, pb.s.dy + n.dy * rB)
+        ..lineTo(pb.s.dx - n.dx * rB, pb.s.dy - n.dy * rB)
+        ..lineTo(pa.s.dx - n.dx * rA, pa.s.dy - n.dy * rA)
+        ..close();
+      final fill = Paint()..color = col;
+      canvas.drawPath(capsule, fill);
+      canvas.drawCircle(pa.s, rA, fill); // rounded caps
+      canvas.drawCircle(pb.s, rB, fill);
+      canvas.drawLine(
+        pa.s,
+        pb.s,
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.10 * t)
+          ..strokeWidth = min(rA, rB) * 0.9
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+    for (final e in _sortedJoints(pts)) {
+      final t = shade(e.value.depth);
+      final isActive = e.key == skeleton.activeJoint;
+      final base = isActive ? activeColor : AppColors.accent;
+      final r = _girthOf(e.key) * focal / max(e.value.depth, 0.1);
+      final rect = Rect.fromCircle(center: e.value.s, radius: r);
+      final lit = Color.lerp(base, Colors.white, 0.55 * t)!;
+      final mid = Color.lerp(base, shadow, 0.15)!;
+      final edge = Color.lerp(base, const Color(0xFF06090F), 0.55)!;
+      canvas.drawCircle(
+        e.value.s,
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            center: const Alignment(-0.45, -0.5), // light from upper-left
+            radius: 1.05,
+            colors: [lit, mid, edge],
+            stops: const [0.0, 0.45, 1.0],
+          ).createShader(rect),
+      );
+      if (isActive) {
+        canvas.drawCircle(
+          e.value.s,
+          r,
+          Paint()
+            ..color = base.withValues(alpha: 0.5)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4,
+        );
+      }
+    }
+  }
+
+  // ── Style: NEON — glowing tubes + bright joints ──────────────────────
+  void _styleNeon(Canvas canvas, Map<String, _P> pts,
+      double Function(double) shade, Color activeColor, double focal) {
+    for (final bone in _sortedBones(pts)) {
+      final pa = pts[bone.a], pb = pts[bone.b];
+      if (pa == null || pb == null) continue;
+      final t = (shade(pa.depth) + shade(pb.depth)) / 2;
+      final base = bone.active ? activeColor : AppColors.accentCyan;
+      canvas.drawLine(
+        pa.s,
+        pb.s,
+        Paint()
+          ..color = base.withValues(alpha: 0.35 * (0.5 + 0.5 * t))
+          ..strokeWidth = bone.active ? 16 : 12
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+      canvas.drawLine(
+        pa.s,
+        pb.s,
+        Paint()
+          ..color = base.withValues(alpha: 0.9)
+          ..strokeWidth = bone.active ? 6 : 4.5
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.drawLine(
+        pa.s,
+        pb.s,
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.75 * t)
+          ..strokeWidth = bone.active ? 2 : 1.5
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+    for (final e in _sortedJoints(pts)) {
+      final t = shade(e.value.depth);
+      final isActive = e.key == skeleton.activeJoint;
+      final base = isActive ? activeColor : AppColors.accentCyan;
+      final r = (isActive ? 7.0 : 5.0) * (0.7 + 0.3 * t);
+      canvas.drawCircle(
+        e.value.s,
+        r * 2.2,
+        Paint()
+          ..color = base.withValues(alpha: 0.30)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+      canvas.drawCircle(e.value.s, r, Paint()..color = base);
+      canvas.drawCircle(e.value.s, r * 0.5,
+          Paint()..color = Colors.white.withValues(alpha: 0.85 * t));
+    }
+  }
+
+  // ── Style: BLOCKY — flat rectangular segments + block joints ─────────
+  void _styleBlocky(Canvas canvas, Map<String, _P> pts,
+      double Function(double) shade, Color activeColor, double focal) {
+    const shadow = Color(0xFF0A1120);
+    for (final bone in _sortedBones(pts)) {
+      final pa = pts[bone.a], pb = pts[bone.b];
+      if (pa == null || pb == null) continue;
+      final ax = _axis(pa.s, pb.s);
+      if (ax == null) continue;
+      final t = (shade(pa.depth) + shade(pb.depth)) / 2;
+      final base = bone.active ? activeColor : AppColors.accent;
+      final col = Color.lerp(Color.lerp(base, shadow, 0.45)!, base, t)!;
+      // constant half-width from the thicker joint (no taper → chunky segments)
+      final avgDepth = max((pa.depth + pb.depth) / 2, 0.1);
+      final w = max(_girthOf(bone.a), _girthOf(bone.b)) * focal / avgDepth;
+      final n = ax.n;
+      final rect = Path()
+        ..moveTo(pa.s.dx + n.dx * w, pa.s.dy + n.dy * w)
+        ..lineTo(pb.s.dx + n.dx * w, pb.s.dy + n.dy * w)
+        ..lineTo(pb.s.dx - n.dx * w, pb.s.dy - n.dy * w)
+        ..lineTo(pa.s.dx - n.dx * w, pa.s.dy - n.dy * w)
+        ..close();
+      canvas.drawPath(rect, Paint()..color = col);
+      // shade one half for a panelled, faceted look
+      final facet = Path()
+        ..moveTo(pa.s.dx, pa.s.dy)
+        ..lineTo(pb.s.dx, pb.s.dy)
+        ..lineTo(pb.s.dx - n.dx * w, pb.s.dy - n.dy * w)
+        ..lineTo(pa.s.dx - n.dx * w, pa.s.dy - n.dy * w)
+        ..close();
+      canvas.drawPath(facet, Paint()..color = shadow.withValues(alpha: 0.22));
+      canvas.drawPath(
+        rect,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.35)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
+    for (final e in _sortedJoints(pts)) {
+      final t = shade(e.value.depth);
+      final isActive = e.key == skeleton.activeJoint;
+      final base = isActive ? activeColor : AppColors.accent;
+      final col = Color.lerp(Color.lerp(base, shadow, 0.35)!, base, t)!;
+      final r = _girthOf(e.key) * focal / max(e.value.depth, 0.1);
+      final box = Rect.fromCenter(center: e.value.s, width: r * 2, height: r * 2);
+      final rr = RRect.fromRectAndRadius(box, Radius.circular(r * 0.28));
+      canvas.drawRRect(rr, Paint()..color = col);
+      canvas.drawRRect(
+        rr,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.35)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
+  }
+
+  // A tapered capsule quad between two screen points (caps drawn separately).
+  Path _capsulePath(Offset a, Offset b, double rA, double rB, Offset n) => Path()
+    ..moveTo(a.dx + n.dx * rA, a.dy + n.dy * rA)
+    ..lineTo(b.dx + n.dx * rB, b.dy + n.dy * rB)
+    ..lineTo(b.dx - n.dx * rB, b.dy - n.dy * rB)
+    ..lineTo(a.dx - n.dx * rA, a.dy - n.dy * rA)
+    ..close();
+
+  // ── Style: CARTOON — anime-inspired chibi (big head, face, hair) ─────
+  void _styleCartoon(Canvas canvas, Map<String, _P> pts,
+      double Function(double) shade, Color activeColor, double focal) {
+    const outline = Color(0xFF2A1F3D); // ink outline
+    const skin = Color(0xFFFFD9B8);
+    const skinShadow = Color(0xFFEBB489);
+    final clothes = AppColors.accentCyan; // shirt/pants
+    final clothesShadow = Color.lerp(AppColors.accentCyan, Colors.black, 0.30)!;
+    final hair = AppColors.accent; // violet hair
+    final hairShadow = Color.lerp(AppColors.accent, Colors.black, 0.35)!;
+    const ow = 3.0; // outline thickness (px)
+
+    const torso = {'pelvis', 'chest', 'neck', 'shoulderL', 'shoulderR', 'hipL', 'hipR'};
+    bool isTorso(Bone b) => torso.contains(b.a) && torso.contains(b.b);
+    double capR(String j) => _girthOf(j) * 1.28; // chunky cartoon limbs
+
+    // ── body: outlined, cel-shaded capsules (skip neck→head; head is drawn
+    //    on top as a big cartoon head) ────────────────────────────────────
+    for (final bone in _sortedBones(pts)) {
+      if (bone.a == 'head' || bone.b == 'head') continue;
+      final pa = pts[bone.a], pb = pts[bone.b];
+      if (pa == null || pb == null) continue;
+      final ax = _axis(pa.s, pb.s);
+      if (ax == null) continue;
+      final n = ax.n;
+      final base = bone.active
+          ? activeColor
+          : (isTorso(bone) ? clothes : skin);
+      final shadowCol = bone.active
+          ? Color.lerp(activeColor, Colors.black, 0.30)!
+          : (isTorso(bone) ? clothesShadow : skinShadow);
+      final rA = capR(bone.a) * focal / max(pa.depth, 0.1);
+      final rB = capR(bone.b) * focal / max(pb.depth, 0.1);
+
+      // ink outline (a larger dark capsule behind the fill)
+      final inkPaint = Paint()..color = outline;
+      canvas.drawPath(_capsulePath(pa.s, pb.s, rA + ow, rB + ow, n), inkPaint);
+      canvas.drawCircle(pa.s, rA + ow, inkPaint);
+      canvas.drawCircle(pb.s, rB + ow, inkPaint);
+      // flat fill
+      final fillPaint = Paint()..color = base;
+      canvas.drawPath(_capsulePath(pa.s, pb.s, rA, rB, n), fillPaint);
+      canvas.drawCircle(pa.s, rA, fillPaint);
+      canvas.drawCircle(pb.s, rB, fillPaint);
+      // single cel shadow on the lower/back half
+      final facet = Path()
+        ..moveTo(pa.s.dx, pa.s.dy)
+        ..lineTo(pb.s.dx, pb.s.dy)
+        ..lineTo(pb.s.dx - n.dx * rB, pb.s.dy - n.dy * rB)
+        ..lineTo(pa.s.dx - n.dx * rA, pa.s.dy - n.dy * rA)
+        ..close();
+      canvas.drawPath(facet, Paint()..color = shadowCol.withValues(alpha: 0.5));
+    }
+
+    // ── the big cartoon head + billboarded face ────────────────────────
+    final headP = pts['head'], neckP = pts['neck'];
+    if (headP != null) {
+      // sit a large head above the neck for a chibi silhouette
+      final up = neckP == null
+          ? const Offset(0, -1)
+          : (headP.s - neckP.s);
+      final upLen = up.distance;
+      final upN = upLen < 0.001 ? const Offset(0, -1) : up / upLen;
+      final R = _girthOf('head') * 2.15 * focal / max(headP.depth, 0.1);
+      final c = headP.s + upN * (R * 0.35);
+
+      // hair back-blob (slightly larger, drawn behind the face)
+      canvas.drawCircle(c, R + ow, Paint()..color = outline);
+      canvas.drawCircle(c, R, Paint()..color = hair);
+      // face (skin) — offset down so hair frames the top
+      final faceC = c + upN * (-R * 0.16);
+      final faceR = R * 0.92;
+      canvas.drawCircle(faceC, faceR + ow, Paint()..color = outline);
+      canvas.drawCircle(faceC, faceR, Paint()..color = skin);
+      // soft skin shadow on the lower face
+      canvas.save();
+      canvas.clipPath(Path()..addOval(Rect.fromCircle(center: faceC, radius: faceR)));
+      canvas.drawCircle(faceC + Offset(0, faceR * 0.55), faceR * 0.9,
+          Paint()..color = skinShadow.withValues(alpha: 0.35));
+      canvas.restore();
+
+      // bangs: a few hair tufts hanging over the forehead
+      final bangY = faceC.dy - faceR * 0.45;
+      for (final bx in [-0.5, -0.15, 0.2, 0.55]) {
+        final tip = Offset(faceC.dx + faceR * bx, bangY + faceR * 0.5);
+        final tuft = Path()
+          ..moveTo(faceC.dx + faceR * (bx - 0.22), bangY - faceR * 0.1)
+          ..lineTo(faceC.dx + faceR * (bx + 0.22), bangY - faceR * 0.1)
+          ..lineTo(tip.dx, tip.dy)
+          ..close();
+        canvas.drawPath(tuft, Paint()..color = hair);
+        canvas.drawPath(
+          tuft,
+          Paint()
+            ..color = hairShadow.withValues(alpha: 0.4)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.0,
+        );
+      }
+
+      // eyes (big anime eyes, billboarded toward the viewer)
+      final eyeY = faceC.dy + faceR * 0.12;
+      final eyeDX = faceR * 0.40;
+      final eyeW = faceR * 0.30, eyeH = faceR * 0.44;
+      for (final sx in [-1.0, 1.0]) {
+        final ec = Offset(faceC.dx + sx * eyeDX, eyeY);
+        // white
+        canvas.drawOval(
+            Rect.fromCenter(center: ec, width: eyeW, height: eyeH),
+            Paint()..color = Colors.white);
+        // iris
+        canvas.drawCircle(ec + Offset(0, eyeH * 0.05), eyeW * 0.42,
+            Paint()..color = hair);
+        canvas.drawCircle(ec + Offset(0, eyeH * 0.05), eyeW * 0.22,
+            Paint()..color = outline);
+        // highlight
+        canvas.drawCircle(ec + Offset(-eyeW * 0.14, -eyeH * 0.14), eyeW * 0.12,
+            Paint()..color = Colors.white);
+        // upper lash line
+        canvas.drawArc(
+          Rect.fromCenter(center: ec, width: eyeW, height: eyeH),
+          3.6, 2.1,
+          false,
+          Paint()
+            ..color = outline
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.2
+            ..strokeCap = StrokeCap.round,
+        );
+      }
+
+      // blush
+      for (final sx in [-1.0, 1.0]) {
+        canvas.drawCircle(
+          Offset(faceC.dx + sx * faceR * 0.58, faceC.dy + faceR * 0.34),
+          faceR * 0.14,
+          Paint()..color = const Color(0xFFFF8FA3).withValues(alpha: 0.5),
+        );
+      }
+
+      // mouth: a tiny smile
+      final mouth = Rect.fromCenter(
+          center: Offset(faceC.dx, faceC.dy + faceR * 0.48),
+          width: faceR * 0.30,
+          height: faceR * 0.22);
+      canvas.drawArc(
+        mouth,
+        0.35, 2.44,
+        false,
+        Paint()
+          ..color = outline
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0
+          ..strokeCap = StrokeCap.round,
+      );
+    }
   }
 
   // Floor reference grid on the y-plane just below the feet.
@@ -455,6 +854,7 @@ class _Skeleton3DPainter extends CustomPainter {
       old.yaw != yaw ||
       old.pitch != pitch ||
       old.zoom != zoom ||
+      old.style != style ||
       old.skeleton != skeleton ||
       old.targetMin != targetMin ||
       old.targetMax != targetMax;

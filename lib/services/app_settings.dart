@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/avatar_style.dart';
 
 /// FSR connection types — values mirror Unity's `FSRConntype` PlayerPrefs strings.
 const kFsrConnTypes = ['Mock', 'USB', 'WebSocket', 'TCP'];
@@ -35,6 +36,7 @@ class AppSettings extends ChangeNotifier {
   static const _kWsUri = 'ws_uri';
   static const _kLastPatientId = 'last_patient_id';
   static const _kDarkMode = 'dark_mode';
+  static const _kAvatarStyle = 'avatar_style';
 
   SharedPreferences? _prefs;
 
@@ -60,6 +62,7 @@ class AppSettings extends ChangeNotifier {
   String wsUri = 'ws://localhost:8765';
   String lastPatientId = '';
   bool darkMode = false;
+  AvatarStyle avatarStyle = AvatarStyle.lines;
 
   List<String> availablePorts = [];
 
@@ -106,6 +109,7 @@ class AppSettings extends ChangeNotifier {
     wsUri = p.getString(_kWsUri) ?? 'ws://localhost:8765';
     lastPatientId = p.getString(_kLastPatientId) ?? '';
     darkMode = p.getBool(_kDarkMode) ?? false;
+    avatarStyle = AvatarStyleInfo.fromToken(p.getString(_kAvatarStyle));
     notifyListeners();
     refreshPorts();
   }
@@ -225,6 +229,11 @@ class AppSettings extends ChangeNotifier {
   void setDarkMode(bool v) {
     darkMode = v;
     _save((p) => p.setBool(_kDarkMode, v));
+  }
+
+  void setAvatarStyle(AvatarStyle v) {
+    avatarStyle = v;
+    _save((p) => p.setString(_kAvatarStyle, v.token));
   }
 
   /// Flattened params for the Unity `configure_session` command.

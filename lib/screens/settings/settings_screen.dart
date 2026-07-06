@@ -2,11 +2,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../models/avatar_style.dart';
+import '../../models/skeleton_3d.dart';
 import '../../services/app_settings.dart';
 import '../../services/session_repository.dart';
 import '../../services/unity_connection_service.dart';
 import '../../services/unity_launch_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/skeleton_3d_view.dart';
 
 /// Mirrors the Unity in-game settings (FSR connection type / COM port / host)
 /// plus dashboard-only options: per-sensor mock data, sessions folder, WS URI.
@@ -131,6 +134,28 @@ class SettingsScreen extends StatelessWidget {
                   _switchRow(
                       'FSR pressure insoles', settings.fsrEnabled, settings.setFsrEnabled),
                   _switchRow('EEG headset', settings.eegEnabled, settings.setEegEnabled),
+                ]),
+                _section('MOVEMENT AVATAR', [
+                  Text(
+                    'How the 3D figure is drawn everywhere it appears — the movement mirror, exercise previews and protocol block guides. Every style uses the same recorded motion, so switching is instant and safe.',
+                    style: GoogleFonts.schibstedGrotesk(
+                        color: AppColors.textSecondary, fontSize: 10.5),
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: SizedBox(
+                      height: 220,
+                      child: Skeleton3DView(
+                        skeleton: Skeleton3D.seatedDemo(kneeAngleDeg: 32),
+                        style: settings.avatarStyle,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final s in AvatarStyle.values)
+                    _avatarChoice(s, settings.avatarStyle == s,
+                        () => settings.setAvatarStyle(s)),
                 ]),
                 _section('MOCK DATA (dashboard testing)', [
                   Text(
@@ -258,6 +283,50 @@ class SettingsScreen extends StatelessWidget {
                   color: active ? Colors.white : AppColors.textSecondary,
                   fontSize: 12,
                   fontWeight: FontWeight.w600)),
+        ),
+      );
+
+  Widget _avatarChoice(AvatarStyle s, bool active, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            decoration: BoxDecoration(
+              color: active
+                  ? AppColors.accent.withValues(alpha: 0.10)
+                  : AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: active ? AppColors.accent : AppColors.border,
+                  width: active ? 1.5 : 1),
+            ),
+            child: Row(children: [
+              Icon(
+                  active
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: active ? AppColors.accent : AppColors.textSecondary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(s.label,
+                          style: GoogleFonts.schibstedGrotesk(
+                              color: AppColors.textPrimary,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 2),
+                      Text(s.description,
+                          style: GoogleFonts.schibstedGrotesk(
+                              color: AppColors.textSecondary, fontSize: 10.5)),
+                    ]),
+              ),
+            ]),
+          ),
         ),
       );
 
