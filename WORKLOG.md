@@ -353,3 +353,15 @@ Derived from the 2026-07-02 critical review.
 **DO:** **Improve ZED capture of adduction (limb-against-torso self-occlusion).** In `ZedController.OnZEDReady`, before `StartBodyTracking()`, force `bodyTrackingModel = HUMAN_BODY_ACCURATE` (was MEDIUM), `bodyTrackingPredictionTimeout = 1.0s` (was 0.2s), and `enableBodyFitting = true`. Overrides the scene/Inspector values in code so it's reliable. bodyFormat stays BODY_38.
 **Why:** During adduction the arm/hand comes against the torso; the MEDIUM model drops the wrist/elbow to low confidence/NaN and the 0.2s prediction timeout blanks the joint out. ACCURATE tracks occluded limbs far better; longer prediction keeps the joint alive through the hidden part of the stroke; body fitting infers hidden joints from the kinematic skeleton. (User feedback after day-1 testing, 6 users.)
 **Verify:** Unity Roslyn 0 errors; `HUMAN_BODY_ACCURATE` confirmed valid in the plugin (pairs with HUMAN_BODY_38_ACCURATE AI model). NOTE: needs a Unity rebuild to take effect; first launch does a one-time ACCURATE-model optimization (~minutes) + is more GPU-heavy — do the rebuild between participants. Today's mid-session mitigations: small arm-torso gap, face the camera, slight front-¾/raised camera angle.
+
+---
+
+### 2026-08-26  11:51
+**DO:** **Deployed the ZED adduction fix.** Rebuilt the Unity engine (headless batchmode) so the 2026-08-25 change (HUMAN_BODY_ACCURATE + 1.0s prediction timeout + body fitting) is now in the running `Smart Game.exe`; verified the fresh Assembly-CSharp.dll (0 compile errors) and relaunched engine + Release dashboard for day-3 testing.
+**Why:** The 08-25 tracking change was source-only until a rebuild; day-3 session needed it live.
+**Verify:** DLL compiled after source edit, 0 errors; WS 8765 listening. First real ZED session carries the one-time ACCURATE-model optimization (~minutes, then cached).
+
+### 2026-09-10  (user-testing log)
+**DO:** **User-testing progress + operational note.** Recurring launches of engine + Release dashboard for testing sessions (both run detached; ports FSR=COM3 / EEG=COM7). Participant counts as reported: day 1 = 6, day 3 = 10, testing ongoing.
+**Why:** Track testing milestones alongside code changes, per request to keep the log current for everything new — not only code diffs.
+**Verify:** No functional/code change in these launches; system confirmed up (engine + dashboard running, 8765 listening) at each start. Only issue surfaced in testing so far = the adduction/ZED occlusion (fixed + deployed above).
