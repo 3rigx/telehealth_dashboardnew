@@ -4,7 +4,9 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../models/pressure_config.dart';
 import '../../models/session_models.dart';
+import '../../models/telerehab_state.dart';
 import '../../services/replay_engine.dart';
 import '../../services/session_repository.dart';
 import '../../theme/app_theme.dart';
@@ -403,15 +405,7 @@ class _PlaybackArea extends StatelessWidget {
                                     color: AppColors.inkMuted, fontSize: 11)))
                         : Padding(
                             padding: const EdgeInsets.all(6),
-                            child: Row(children: [
-                              Expanded(
-                                  child: FootHeatmap(
-                                      label: 'Left', zones: zones.$1, isLeft: true)),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                  child: FootHeatmap(
-                                      label: 'Right', zones: zones.$2, isLeft: false)),
-                            ]),
+                            child: _ReplayFeet(engine: engine, zones: zones),
                           ),
                   ),
                 ),
@@ -425,6 +419,35 @@ class _PlaybackArea extends StatelessWidget {
       ),
       if (engine.session?.hasProtocol ?? false) _BlockTimeline(engine: engine),
       _TransportBar(engine: engine),
+    ]);
+  }
+}
+
+/// Renders the recorded foot map(s): one foot for a single-insole (v2) session,
+/// two for a legacy two-insole (v1) recording, so both eras stay viewable.
+class _ReplayFeet extends StatelessWidget {
+  final ReplayEngine engine;
+  final (FootZones, FootZones) zones;
+  const _ReplayFeet({required this.engine, required this.zones});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = engine.session;
+    if (session != null && session.isSingleFoot) {
+      final left = PressureConfig.isLeft(session.foot);
+      final z = left ? zones.$1 : zones.$2;
+      final label = '${session.foot[0].toUpperCase()}${session.foot.substring(1)} Foot';
+      return Center(
+        child: FractionallySizedBox(
+          widthFactor: 0.5,
+          child: FootHeatmap(label: label, zones: z, isLeft: left),
+        ),
+      );
+    }
+    return Row(children: [
+      Expanded(child: FootHeatmap(label: 'Left', zones: zones.$1, isLeft: true)),
+      const SizedBox(width: 8),
+      Expanded(child: FootHeatmap(label: 'Right', zones: zones.$2, isLeft: false)),
     ]);
   }
 }
@@ -734,10 +757,13 @@ class _ChartsTab extends StatelessWidget {
         Expanded(
             child: _chart(
           context,
-          title: 'Total load (%) & L−R asymmetry (%)',
+          title: a.asymmetrySeries.isEmpty
+              ? 'Total load (%)'
+              : 'Total load (%) & L−R asymmetry (%)',
           lines: [
             (_spots(a.loadSeries), AppColors.accentCyan),
-            (_spots(a.asymmetrySeries), AppColors.accentOrange),
+            if (a.asymmetrySeries.isNotEmpty)
+              (_spots(a.asymmetrySeries), AppColors.accentOrange),
           ],
           playheadSec: playheadSec,
         )),
@@ -973,8 +999,9 @@ class _SummaryTab extends StatelessWidget {
         _metric('Mean ROM', '${a.meanRom.toStringAsFixed(0)}°', AppColors.accentGreen),
         _metric('Best ROM', '${a.bestRom.toStringAsFixed(0)}°', AppColors.accentGreen),
         _metric('Mean rep time', '${a.meanRepDuration.toStringAsFixed(1)}s', AppColors.accentCyan),
-        _metric('Asymmetry', '${a.meanAsymmetry.toStringAsFixed(1)}%',
-            a.meanAsymmetry < 15 ? AppColors.accentGreen : AppColors.accentOrange),
+        if (a.asymmetrySeries.isNotEmpty)
+          _metric('Asymmetry', '${a.meanAsymmetry.toStringAsFixed(1)}%',
+              a.meanAsymmetry < 15 ? AppColors.accentGreen : AppColors.accentOrange),
         _metric('Smoothness', '${(a.meanSmoothness * 100).toStringAsFixed(0)}%',
             a.meanSmoothness > 0.6 ? AppColors.accentGreen : AppColors.accentOrange),
         _metric(

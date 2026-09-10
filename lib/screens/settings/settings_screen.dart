@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../models/avatar_style.dart';
+import '../../models/serial_port_info.dart';
 import '../../models/skeleton_3d.dart';
 import '../../services/app_settings.dart';
 import '../../services/session_repository.dart';
@@ -87,11 +89,13 @@ class SettingsScreen extends StatelessWidget {
                                 style: GoogleFonts.schibstedGrotesk(
                                     color: AppColors.textSecondary, fontSize: 11))
                             : Wrap(spacing: 8, runSpacing: 8, children: [
-                                for (final port in settings.availablePorts)
+                                for (final p in settings.ports)
                                   SizedBox(
-                                    width: 110,
-                                    child: _choice(port, settings.fsrUsbPort == port,
-                                        () => settings.setFsrUsbPort(port)),
+                                    width: 120,
+                                    child: _portChoice(p, settings.fsrUsbPort == p.port,
+                                        () => settings.setFsrUsbPort(p.port),
+                                        suggested: p.isUsbSerial,
+                                        suggestHint: 'USB serial (Arduino) — likely the FSR insole'),
                                   ),
                               ]),
                       ),
@@ -102,6 +106,12 @@ class SettingsScreen extends StatelessWidget {
                         icon: const Icon(Icons.refresh, size: 18, color: AppColors.accent),
                       ),
                     ]),
+                    const SizedBox(height: 4),
+                    Text(
+                      "The USB-serial (Arduino) port is marked ★ — that's the insole, and it's "
+                      "auto-selected. The EEG is a Bluetooth port, so don't pick the same COM for both.",
+                      style: GoogleFonts.schibstedGrotesk(color: AppColors.textSecondary, fontSize: 10),
+                    ),
                     const SizedBox(height: 14),
                   ],
                   if (settings.fsrConnType == 'WebSocket' ||
@@ -134,6 +144,43 @@ class SettingsScreen extends StatelessWidget {
                   _switchRow(
                       'FSR pressure insoles', settings.fsrEnabled, settings.setFsrEnabled),
                   _switchRow('EEG headset', settings.eegEnabled, settings.setEegEnabled),
+                  if (settings.eegEnabled) ...[
+                    const SizedBox(height: 10),
+                    _label('EEG (Unicorn) serial port'),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Expanded(
+                        child: settings.availablePorts.isEmpty
+                            ? Text('No COM ports detected — pair the headset via its dongle first',
+                                style: GoogleFonts.schibstedGrotesk(
+                                    color: AppColors.textSecondary, fontSize: 11))
+                            : Wrap(spacing: 8, runSpacing: 8, children: [
+                                for (final p in settings.ports)
+                                  SizedBox(
+                                    width: 120,
+                                    child: _portChoice(p, settings.eegComPort == p.port,
+                                        () => settings.setEegComPort(p.port),
+                                        suggested: p.isBoundBluetooth,
+                                        suggestHint: 'Bound to a paired headset — likely the EEG'),
+                                  ),
+                              ]),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        tooltip: 'Rescan ports',
+                        onPressed: settings.refreshPorts,
+                        icon: const Icon(Icons.refresh, size: 18, color: AppColors.accent),
+                      ),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Only currently-connected ports are shown. The port bound to a paired '
+                      'headset is marked ★ and selected automatically — hover any port to see '
+                      'its device name. Re-pairing can change the COM number, so rescan after '
+                      'pairing if the headset isn\'t listed.',
+                      style: GoogleFonts.schibstedGrotesk(color: AppColors.textSecondary, fontSize: 10),
+                    ),
+                  ],
                 ]),
                 _section('MOVEMENT AVATAR', [
                   Text(
@@ -233,6 +280,36 @@ class SettingsScreen extends StatelessWidget {
                     style: TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
                   ),
                 ]),
+                _section('DATA PROTECTION', [
+                  _DataProtectionStatus(sessionsRoot: settings.sessionsRoot),
+                ]),
+                _section('HELP', [
+                  Row(children: [
+                    Expanded(
+                      child: Text(
+                        'The setup guide covers hardware/software requirements, the privacy '
+                        'rules and the study workflow.',
+                        style: GoogleFonts.schibstedGrotesk(
+                            color: AppColors.textSecondary, fontSize: 10.5),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          Navigator.pushNamed(context, '/onboarding'),
+                      icon: const Icon(Icons.menu_book_outlined, size: 15),
+                      label: Text('Show setup guide',
+                          style: GoogleFonts.schibstedGrotesk(
+                              fontSize: 11, fontWeight: FontWeight.w600)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.accent,
+                        side: const BorderSide(color: AppColors.accent),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                      ),
+                    ),
+                  ]),
+                ]),
               ]),
             ),
           ),
@@ -283,6 +360,53 @@ class SettingsScreen extends StatelessWidget {
                   color: active ? Colors.white : AppColors.textSecondary,
                   fontSize: 12,
                   fontWeight: FontWeight.w600)),
+        ),
+      );
+
+  /// A port chip that shows the COM name, reveals the full device (friendly)
+  /// name on hover, and stars the port bound to a paired headset ([suggested]).
+  Widget _portChoice(SerialPortInfo p, bool active, VoidCallback onTap,
+          {bool suggested = false, String suggestHint = ''}) =>
+      Tooltip(
+        message: suggested
+            ? '${p.friendlyName}\n${suggestHint.isNotEmpty ? suggestHint : 'Suggested'}'
+            : p.friendlyName,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: active ? AppColors.accent : AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                  color: active
+                      ? AppColors.accent
+                      : suggested
+                          ? AppColors.accent.withValues(alpha: 0.5)
+                          : AppColors.border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (suggested) ...[
+                  Icon(Icons.star_rounded,
+                      size: 14, color: active ? Colors.white : AppColors.accent),
+                  const SizedBox(width: 4),
+                ],
+                Flexible(
+                  child: Text(p.port,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.schibstedGrotesk(
+                          color: active ? Colors.white : AppColors.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
+          ),
         ),
       );
 
@@ -397,4 +521,107 @@ class SettingsScreen extends StatelessWidget {
           textStyle: GoogleFonts.schibstedGrotesk(fontSize: 11, fontWeight: FontWeight.w600),
         ),
       );
+}
+
+// ── data protection status ────────────────────────────────────────────────────
+
+/// Shows whether the drive holding the recorded sessions is BitLocker-
+/// encrypted. Raw session files are plaintext by design (Unity writes them),
+/// so at-rest protection comes from (a) pseudonymous participant codes and
+/// (b) full-disk encryption — this makes (b) visible instead of assumed.
+class _DataProtectionStatus extends StatefulWidget {
+  final String sessionsRoot;
+  const _DataProtectionStatus({required this.sessionsRoot});
+
+  @override
+  State<_DataProtectionStatus> createState() => _DataProtectionStatusState();
+}
+
+class _DataProtectionStatusState extends State<_DataProtectionStatus> {
+  String _status = 'Checking…';
+  Color _color = const Color(0xFF8A9BB5);
+  bool _busy = false;
+
+  String get _drive =>
+      widget.sessionsRoot.length >= 2 && widget.sessionsRoot[1] == ':'
+          ? widget.sessionsRoot.substring(0, 2)
+          : 'C:';
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    if (_busy) return;
+    _busy = true;
+    setState(() {
+      _status = 'Checking…';
+      _color = const Color(0xFF8A9BB5);
+    });
+    try {
+      // Shell COM property — readable without administrator rights.
+      final r = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        "(New-Object -ComObject Shell.Application).NameSpace('$_drive\\')"
+            ".Self.ExtendedProperty('System.Volume.BitLockerProtection')",
+      ]);
+      final out = (r.stdout as String).trim();
+      final code = int.tryParse(out);
+      final (txt, col) = switch (code) {
+        1 || 6 => ('BitLocker ON — data at rest is encrypted', AppColors.accentGreen),
+        3 => ('BitLocker is encrypting…', AppColors.accentOrange),
+        5 => ('BitLocker SUSPENDED — protection paused', AppColors.accentOrange),
+        2 || 4 => (
+            'NOT encrypted — enable BitLocker on $_drive to protect recorded data',
+            AppColors.accentRed
+          ),
+        _ => ('Could not determine BitLocker status', const Color(0xFF8A9BB5)),
+      };
+      if (mounted) setState(() { _status = txt; _color = col; });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _status = 'Could not determine BitLocker status';
+          _color = const Color(0xFF8A9BB5);
+        });
+      }
+    }
+    _busy = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: _color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text('$_drive drive — $_status',
+              style: GoogleFonts.schibstedGrotesk(
+                  color: AppColors.textPrimary, fontSize: 12)),
+        ),
+        IconButton(
+          tooltip: 'Re-check',
+          onPressed: _check,
+          icon: const Icon(Icons.refresh, size: 16, color: AppColors.accent),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      Text(
+        'Recorded session files are plaintext on disk (Unity writes them directly). '
+        'Protection comes from pseudonymous participant codes (no identities in this '
+        'software) plus full-disk encryption. Keep the code–identity enrolment log '
+        'off this computer.',
+        style: GoogleFonts.schibstedGrotesk(
+            color: AppColors.textSecondary, fontSize: 10.5),
+      ),
+    ]);
+  }
 }

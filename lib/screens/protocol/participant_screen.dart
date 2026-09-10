@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +12,7 @@ import '../../services/unity_connection_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/avatar_guide_player.dart';
 import '../../widgets/eeg_channel_map.dart';
+import '../../widgets/exercise_media_view.dart';
 import '../../widgets/foot_heatmap.dart';
 import '../../widgets/sensor_warmup_loader.dart';
 import '../../widgets/skeleton_3d_view.dart';
@@ -668,21 +668,24 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
 
   Widget _pressureCard(TelerehabState state) {
     final p = state.plantar;
-    final lSum = p.left.sum, rSum = p.right.sum;
-    final total = lSum + rSum;
-    final leftPct = total <= 0 ? 0.5 : lSum / total;
+    final z = p.zones;
+    final ml = z.medial + z.lateral;
+    // Single insole: the meaningful balance is medial vs lateral load, not L vs R.
+    final medialPct = ml <= 0 ? 0.5 : z.medial / ml;
+    final label = p.foot.isEmpty ? 'FOOT' : p.foot.toUpperCase();
     return _panel(
       'Pressure Balance',
       Column(children: [
         Expanded(
-          child: Row(children: [
-            Expanded(child: FootHeatmap(label: 'LEFT', zones: p.left, isLeft: true)),
-            const SizedBox(width: 8),
-            Expanded(child: FootHeatmap(label: 'RIGHT', zones: p.right, isLeft: false)),
-          ]),
+          child: Center(
+            child: FractionallySizedBox(
+              widthFactor: 0.55,
+              child: FootHeatmap(label: label, zones: z, isLeft: p.isLeft),
+            ),
+          ),
         ),
         const SizedBox(height: 8),
-        _balanceBar(leftPct.toDouble()),
+        _balanceBar(medialPct.toDouble()),
       ]),
     );
   }
@@ -693,10 +696,10 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
     final color = balanced ? AppColors.accentGreen : AppColors.accentOrange;
     return Column(children: [
       Row(children: [
-        Text('L ${(leftPct * 100).round()}%',
+        Text('Medial ${(leftPct * 100).round()}%',
             style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 11)),
         const Spacer(),
-        Text('${(rightPct * 100).round()}% R',
+        Text('${(rightPct * 100).round()}% Lateral',
             style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 11)),
       ]),
       const SizedBox(height: 4),
@@ -806,31 +809,22 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
   /// active block (GIF / animated WebP render; video formats show a placeholder
   /// until the video_player package is added).
   Widget _guidePlayer(ProtocolClass c) {
-    final ext = c.animationPath.split('.').last.toLowerCase();
-    if (ext == 'gif' || ext == 'webp') {
+    if (ExerciseMediaView.isSupported(c.animationPath)) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: Image.file(
-          File(c.animationPath),
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-          errorBuilder: (_, e, s) => _animPlaceholder(c),
-        ),
+        child: ExerciseMediaView(c.animationPath),
       );
     }
     return _animPlaceholder(c);
   }
 
   Widget _refAnimation(ProtocolClass c) {
-    final ext = c.animationPath.split('.').last.toLowerCase();
-    if (ext == 'gif' || ext == 'webp') {
+    if (ExerciseMediaView.isSupported(c.animationPath)) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: Image.file(
-          File(c.animationPath),
+        child: SizedBox(
           height: 180,
-          fit: BoxFit.contain,
-          errorBuilder: (_, e, s) => _animPlaceholder(c),
+          child: ExerciseMediaView(c.animationPath),
         ),
       );
     }

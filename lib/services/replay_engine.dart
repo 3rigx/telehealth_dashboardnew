@@ -203,8 +203,8 @@ class ReplayEngine extends ChangeNotifier {
     final k = s.fsrScale <= 0 ? 1.0 : 1.0 / s.fsrScale;
     FootZones n(FootZones z) => FootZones(
           toe: (z.toe * k).clamp(0.0, 1.0),
-          midInner: (z.midInner * k).clamp(0.0, 1.0),
-          midOuter: (z.midOuter * k).clamp(0.0, 1.0),
+          medial: (z.medial * k).clamp(0.0, 1.0),
+          lateral: (z.lateral * k).clamp(0.0, 1.0),
           heel: (z.heel * k).clamp(0.0, 1.0),
         );
     return (n(f.left), n(f.right));
@@ -238,15 +238,19 @@ class ReplayEngine extends ChangeNotifier {
     final raw = side == 'L' ? tL : tR;
     final angles = _smooth(raw, window: 5);
 
-    // FSR-derived series.
+    // FSR-derived series. Load normalises by (4 pads × insoleCount); asymmetry is
+    // only meaningful with two insoles, so it stays empty for a single foot.
     final load = <(int, double)>[];
     final asym = <(int, double)>[];
     final scale = s.fsrScale <= 0 ? 1.0 : s.fsrScale;
+    final pads = 4 * s.insoleCount;
     for (final f in s.fsr) {
       final l = f.left.sum / scale, r = f.right.sum / scale;
-      load.add((f.tMs, ((l + r) / 8 * 100).clamp(0, 200).toDouble()));
-      final tot = l + r;
-      asym.add((f.tMs, tot < 1e-6 ? 0 : (l - r) / tot * 100));
+      load.add((f.tMs, ((l + r) / pads * 100).clamp(0, 200).toDouble()));
+      if (!s.isSingleFoot) {
+        final tot = l + r;
+        asym.add((f.tMs, tot < 1e-6 ? 0 : (l - r) / tot * 100));
+      }
     }
 
     final reps = _detectReps(angles);

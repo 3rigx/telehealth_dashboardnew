@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'pressure_config.dart';
 import 'skeleton_3d.dart';
 import 'telerehab_state.dart';
 
@@ -64,6 +65,18 @@ class SensorEntry {
   final int sampleCount;
   final int channels;
 
+  // FSR / plantar pressure layout (manifest schema v2). insoleCount == 0 marks a
+  // pre-v2 manifest (treated as the legacy two-insole rig by the reader).
+  final int insoleCount;
+  final String foot;              // "left" | "right" (single insole)
+  final List<String> channelNames;
+  final String markerFile;        // pressure_markers.csv, if Arduino markers were captured
+
+  /// Unloaded baseline [toe, medial, lateral, heel] the raw values are offset from
+  /// (empty when none was captured), and its Arduino millis().
+  final List<int> baseline;
+  final int baselineArduinoMs;
+
   const SensorEntry({
     this.enabled = false,
     this.source = '',
@@ -71,6 +84,12 @@ class SensorEntry {
     this.sampleRateHz = 0,
     this.sampleCount = 0,
     this.channels = 0,
+    this.insoleCount = 0,
+    this.foot = '',
+    this.channelNames = const [],
+    this.markerFile = '',
+    this.baseline = const [],
+    this.baselineArduinoMs = 0,
   });
 
   factory SensorEntry.fromJson(dynamic j) {
@@ -82,6 +101,12 @@ class SensorEntry {
       sampleRateHz: (j['sampleRateHz'] ?? 0).toDouble(),
       sampleCount: j['sampleCount'] ?? 0,
       channels: j['channels'] ?? 0,
+      insoleCount: j['insoleCount'] ?? 0,
+      foot: j['foot'] ?? '',
+      channelNames: (j['channelNames'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      markerFile: j['markerFile'] ?? '',
+      baseline: (j['baseline'] as List?)?.map((e) => (e as num).toInt()).toList() ?? const [],
+      baselineArduinoMs: j['baselineArduinoMs'] ?? 0,
     );
   }
 }
@@ -259,6 +284,21 @@ class RecordedSession {
   bool get hasEeg => eeg.isNotEmpty;
   bool get hasProtocol => markers.isNotEmpty;
 
+  /// Number of insoles this recording used. Pre-v2 manifests don't record it
+  /// (insoleCount == 0) and are the legacy two-insole layout.
+  int get insoleCount {
+    final n = summary.manifest.fsr.insoleCount;
+    return n == 0 ? 2 : n;
+  }
+
+  bool get isSingleFoot => insoleCount == 1;
+
+  /// Side the single insole is on (falls back to the study default).
+  String get foot {
+    final f = summary.manifest.fsr.foot;
+    return f.isEmpty ? PressureConfig.foot : f;
+  }
+
   int get durationMs {
     var d = 0;
     if (frames.isNotEmpty) d = max(d, frames.last.tMs);
@@ -324,8 +364,8 @@ class RecordedSession {
     final all = <double>[];
     for (final s in fsr) {
       all.addAll([
-        s.left.toe, s.left.midInner, s.left.midOuter, s.left.heel,
-        s.right.toe, s.right.midInner, s.right.midOuter, s.right.heel,
+        s.left.toe, s.left.medial, s.left.lateral, s.left.heel,
+        s.right.toe, s.right.medial, s.right.lateral, s.right.heel,
       ]);
     }
     final nonZero = all.where((v) => v > 0).toList()..sort();

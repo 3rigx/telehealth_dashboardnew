@@ -11,7 +11,9 @@ import '../../services/exercise_repository.dart';
 import '../../services/protocol_repository.dart';
 import '../../services/protocol_run_controller.dart';
 import '../../services/unity_connection_service.dart';
+import '../../services/unity_launch_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/participant_picker.dart';
 import 'participant_screen.dart';
 
 /// Protocol Builder — design a research protocol (classes, block sequence,
@@ -103,7 +105,10 @@ class _ProtocolBuilderScreenState extends State<ProtocolBuilderScreen> {
     }
     final settings = context.read<AppSettings>();
     final conn = context.read<UnityConnectionService>();
-    final id = await _askParticipantId(settings.lastPatientId);
+    final launcher = context.read<UnityLaunchService>();
+    // Strict pseudonymity: participant must be picked from the enrolled
+    // registry — free-text IDs can no longer reach folder names / run.json.
+    final id = await pickParticipant(context, initial: settings.lastPatientId);
     if (id == null || id.trim().isEmpty) return;
     settings.setLastPatientId(id.trim());
 
@@ -112,44 +117,13 @@ class _ProtocolBuilderScreenState extends State<ProtocolBuilderScreen> {
       settings: settings,
       protocol: p.clone(),
       participantId: id.trim(),
+      launcher: launcher,
     );
     if (!mounted) return;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) =>
           ParticipantScreen(protocol: controller.protocol, controller: controller),
     ));
-  }
-
-  Future<String?> _askParticipantId(String initial) {
-    final ctrl = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text('Run live — participant ID',
-            style: GoogleFonts.schibstedGrotesk(color: AppColors.textPrimary, fontSize: 16)),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          style: GoogleFonts.schibstedGrotesk(color: AppColors.textPrimary, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: 'e.g. P001',
-            hintStyle: GoogleFonts.schibstedGrotesk(color: AppColors.textSecondary),
-          ),
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, ctrl.text),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent, foregroundColor: Colors.white),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _delete(Protocol p) async {

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'services/app_settings.dart';
 import 'services/exercise_repository.dart';
+import 'services/participant_repository.dart';
 import 'services/protocol_repository.dart';
 import 'services/replay_engine.dart';
 import 'services/session_repository.dart';
@@ -11,12 +13,15 @@ import 'theme/app_theme.dart';
 import 'screens/exercises/exercise_library_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/live_monitor/live_monitor_screen.dart';
+import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/participants/participants_screen.dart';
 import 'screens/protocol/protocol_builder_screen.dart';
 import 'screens/replay/replay_screen.dart';
 import 'screens/settings/settings_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized(); // libmpv-backed video for exercise-guide clips
 
   final settings = AppSettings();
   await settings.init();
@@ -26,6 +31,9 @@ Future<void> main() async {
   final protocols = ProtocolRepository()..setRoot(settings.protocolsRoot);
 
   final exercises = ExerciseRepository()..setRoot(settings.exercisesRoot);
+
+  final participantRegistry = ParticipantRepository()
+    ..setRoot(settings.participantsRoot);
 
   final connection = UnityConnectionService()
     ..setMocks(
@@ -41,6 +49,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: repository),
         ChangeNotifierProvider.value(value: protocols),
         ChangeNotifierProvider.value(value: exercises),
+        ChangeNotifierProvider.value(value: participantRegistry),
         ChangeNotifierProvider.value(value: connection),
         ChangeNotifierProvider(create: (_) => UnityLaunchService()),
         ChangeNotifierProvider(create: (_) => ReplayEngine()),
@@ -67,6 +76,8 @@ class TelerehabApp extends StatelessWidget {
         '/monitor': (_) => const LiveMonitorScreen(),
         '/protocols': (_) => const ProtocolBuilderScreen(),
         '/exercises': (_) => const ExerciseLibraryScreen(),
+        '/participants': (_) => const ParticipantsScreen(),
+        '/onboarding': (_) => const OnboardingScreen(),
         '/replay': (_) => const ReplayScreen(),
         '/settings': (_) => const SettingsScreen(),
       },

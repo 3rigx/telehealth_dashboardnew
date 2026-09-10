@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/exercise_asset.dart';
 import '../models/session_models.dart' show SkeletonFrame;
 import '../services/exercise_repository.dart';
+import 'exercise_media_view.dart';
 import 'skeleton_3d_view.dart';
 
 /// Plays a recorded skeleton clip on the bone avatar, looping — the participant's
@@ -78,6 +80,7 @@ class AvatarExerciseGuide extends StatefulWidget {
 }
 
 class _AvatarExerciseGuideState extends State<AvatarExerciseGuide> {
+  ExerciseAsset? _asset;
   List<SkeletonFrame>? _frames;
 
   @override
@@ -90,6 +93,7 @@ class _AvatarExerciseGuideState extends State<AvatarExerciseGuide> {
   void didUpdateWidget(covariant AvatarExerciseGuide old) {
     super.didUpdateWidget(old);
     if (old.exerciseId != widget.exerciseId) {
+      _asset = null;
       _frames = null;
       _load();
     }
@@ -98,12 +102,23 @@ class _AvatarExerciseGuideState extends State<AvatarExerciseGuide> {
   Future<void> _load() async {
     final repo = context.read<ExerciseRepository>();
     final ex = repo.byId(widget.exerciseId);
-    final frames = ex == null ? <SkeletonFrame>[] : await repo.loadFrames(ex);
+    _asset = ex;
+    // Uploaded media has no skeleton to load — it renders directly.
+    if (ex == null || !ex.isRecorded) {
+      if (mounted) setState(() {});
+      return;
+    }
+    final frames = await repo.loadFrames(ex);
     if (mounted) setState(() => _frames = frames);
   }
 
   @override
   Widget build(BuildContext context) {
+    final ex = _asset;
+    if (ex != null && !ex.isRecorded) {
+      final path = context.read<ExerciseRepository>().clipPath(ex);
+      return ExerciseMediaView(path);
+    }
     if (_frames == null) {
       return const Center(
         child: SizedBox(

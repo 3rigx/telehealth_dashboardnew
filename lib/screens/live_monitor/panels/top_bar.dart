@@ -142,13 +142,23 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
         const SizedBox(width: 4),
         _IconBtn(Icons.flag_outlined, 'Mark event', AppColors.inkMuted,
           svc.markEvent),
+        // Re-baseline the insole — preview only (Unity ignores it once recording).
+        if (!s.session.isRecording) ...[
+          const SizedBox(width: 4),
+          _IconBtn(Icons.exposure_zero, 'Re-baseline insole (unloaded)',
+            AppColors.accentCyan, svc.requestBaseline),
+        ],
 
         const SizedBox(width: 12),
 
         // Sensor status (compact: icon + dot only)
         _SensorChip(Icons.videocam_outlined, 'Cam', s.sensors.camera),
         const SizedBox(width: 4),
-        _SensorChip(Icons.directions_walk, 'FSR', s.sensors.pressureInsole),
+        // FSR: red = port not open, amber = open but no pad data (handshake/baud),
+        // green = data flowing.
+        _SensorChip(Icons.directions_walk, 'FSR', s.sensors.pressureInsole,
+          warn: s.sensors.pressureInsole && !s.sensors.pressureStreaming,
+          warnText: 'No data'),
         const SizedBox(width: 4),
         _SensorChip(Icons.psychology_outlined, 'EEG', s.sensors.eeg),
 
@@ -258,30 +268,38 @@ class _SensorChip extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool connected;
-  const _SensorChip(this.icon, this.label, this.connected);
+  /// Connected but not receiving data yet (amber) — e.g. the FSR port is open but
+  /// the handshake hasn't started streaming. [warnText] labels that state.
+  final bool warn;
+  final String warnText;
+  const _SensorChip(this.icon, this.label, this.connected,
+      {this.warn = false, this.warnText = 'No data'});
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    decoration: BoxDecoration(
-      color: (connected ? AppColors.accentGreen : AppColors.accentRed).withOpacity(0.08),
-      borderRadius: BorderRadius.circular(6),
-      border: Border.all(
-        color: (connected ? AppColors.accentGreen : AppColors.accentRed).withOpacity(0.3),
+  Widget build(BuildContext context) {
+    final color = !connected
+        ? AppColors.accentRed
+        : (warn ? AppColors.accentOrange : AppColors.accentGreen);
+    final status = !connected ? 'Offline' : (warn ? warnText : 'Connected');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
-    ),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(icon, size: 12, color: connected ? AppColors.accentGreen : AppColors.accentRed),
-      const SizedBox(width: 4),
-      Text(label, style: GoogleFonts.schibstedGrotesk(
-        color: connected ? AppColors.accentGreen : AppColors.accentRed,
-        fontSize: 10, fontWeight: FontWeight.w500,
-      )),
-      const SizedBox(width: 4),
-      Text(connected ? 'Connected' : 'Offline',
-        style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 9)),
-    ]),
-  );
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(label, style: GoogleFonts.schibstedGrotesk(
+          color: color, fontSize: 10, fontWeight: FontWeight.w500,
+        )),
+        const SizedBox(width: 4),
+        Text(status,
+          style: GoogleFonts.schibstedGrotesk(color: AppColors.inkMuted, fontSize: 9)),
+      ]),
+    );
+  }
 }
 
 class _ConnectionDot extends StatelessWidget {

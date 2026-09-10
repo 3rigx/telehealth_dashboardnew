@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ui';
+import 'pressure_config.dart';
 import 'skeleton_3d.dart';
 
 class SessionInfo {
@@ -71,23 +72,25 @@ class JointAngleData {
       angle >= targetMin! && angle <= targetMax!;
 }
 
-/// The four physical FSR regions the real insole measures, each normalised 0..1.
-/// Mirrors Unity's [FSRState]: Toe, Middle_Inner (medial), Middle_Outer (lateral), Heel.
+/// The four physical FSR pads the insole measures, each normalised 0..1.
+/// Canonical pad names (medial / lateral — never midInner/midOuter), mirroring
+/// Unity's [FSRState] fields Toe, Middle_Inner (medial), Middle_Outer (lateral),
+/// Heel and the Arduino pin order A0..A3.
 class FootZones {
   final double toe;
-  final double midInner;
-  final double midOuter;
+  final double medial;
+  final double lateral;
   final double heel;
 
   const FootZones({
     this.toe = 0,
-    this.midInner = 0,
-    this.midOuter = 0,
+    this.medial = 0,
+    this.lateral = 0,
     this.heel = 0,
   });
 
-  double get sum => toe + midInner + midOuter + heel;
-  double get forefoot => (toe + midInner + midOuter) / 3;
+  double get sum => toe + medial + lateral + heel;
+  double get forefoot => (toe + medial + lateral) / 3;
 
   /// Center of pressure within the foot, in normalised foot coordinates
   /// (x: 0 = medial … 1 = lateral, y: 0 = toe … 1 = heel). Returns the
@@ -97,72 +100,106 @@ class FootZones {
     if (total <= 0) return const Offset(0.5, 0.5);
     // Approx zone centres (x medial→lateral, y toe→heel) for a generic insole.
     const pToe = Offset(0.50, 0.12);
-    const pInner = Offset(0.32, 0.48);
-    const pOuter = Offset(0.68, 0.48);
+    const pMedial = Offset(0.32, 0.48);
+    const pLateral = Offset(0.68, 0.48);
     const pHeel = Offset(0.50, 0.86);
-    final x = (pToe.dx * toe + pInner.dx * midInner + pOuter.dx * midOuter + pHeel.dx * heel) / total;
-    final y = (pToe.dy * toe + pInner.dy * midInner + pOuter.dy * midOuter + pHeel.dy * heel) / total;
+    final x = (pToe.dx * toe + pMedial.dx * medial + pLateral.dx * lateral + pHeel.dx * heel) / total;
+    final y = (pToe.dy * toe + pMedial.dy * medial + pLateral.dy * lateral + pHeel.dy * heel) / total;
     return Offset(x, y);
   }
 
   factory FootZones.fromJson(Map<String, dynamic>? j) {
     if (j == null) return const FootZones();
     return FootZones(
-      toe:      (j['toe']      ?? 0.0).toDouble(),
-      midInner: (j['midInner'] ?? 0.0).toDouble(),
-      midOuter: (j['midOuter'] ?? 0.0).toDouble(),
-      heel:     (j['heel']     ?? 0.0).toDouble(),
+      toe:     (j['toe']     ?? 0.0).toDouble(),
+      // Accept the legacy midInner/midOuter keys so an older recording/stream
+      // still parses, but the canonical keys are medial/lateral.
+      medial:  (j['medial']  ?? j['midInner'] ?? 0.0).toDouble(),
+      lateral: (j['lateral'] ?? j['midOuter'] ?? 0.0).toDouble(),
+      heel:    (j['heel']    ?? 0.0).toDouble(),
     );
   }
 }
 
+/// Live plantar-pressure state for the single insole (study default). [foot] is
+/// the side the insole is on. The legacy two-insole broadcast is still parsed
+/// (the configured study foot is shown) so the dashboard keeps working if the
+/// capture engine is reverted to the two-insole rig.
 class PlantarData {
-  final FootZones left;
-  final FootZones right;
+  final String foot;             // "left" | "right"
+  final FootZones zones;
   final double totalLoad;        // % of full-scale
   final double heelLoad;
   final double forefootLoad;
-  final double asymmetry;        // %
-  final double stability;        // COP excursion SD (computed from history)
+  final double stability;        // mediolateral COP SD (computed from history)
+  final bool baselineUnderLoad;  // the unloaded baseline was captured with a pad loaded
 
   const PlantarData({
-    this.left = const FootZones(),
-    this.right = const FootZones(),
+    this.foot = PressureConfig.foot,
+    this.zones = const FootZones(),
     this.totalLoad = 0,
     this.heelLoad = 0,
     this.forefootLoad = 0,
-    this.asymmetry = 0,
     this.stability = 0,
+    this.baselineUnderLoad = false,
   });
 
-  factory PlantarData.fromJson(Map<String, dynamic> j) => PlantarData(
-    left:        FootZones.fromJson(j['left']  as Map<String, dynamic>?),
-    right:       FootZones.fromJson(j['right'] as Map<String, dynamic>?),
-    totalLoad:   (j['totalLoad']   ?? 0.0).toDouble(),
-    heelLoad:    (j['heelLoad']    ?? 0.0).toDouble(),
-    forefootLoad:(j['forefootLoad']?? 0.0).toDouble(),
-    asymmetry:   (j['asymmetry']   ?? 0.0).toDouble(),
-    stability:   (j['stability']   ?? 0.0).toDouble(),
-  );
+  bool get isLeft => PressureConfig.isLeft(foot);
+
+  factory PlantarData.fromJson(Map<String, dynamic> j) {
+    double d(String k) => (j[k] ?? 0.0).toDouble();
+
+    // Single-insole shape (study default): {foot, insoleCount, zones:{...}, ...}.
+    if (j['zones'] != null) {
+      return PlantarData(
+        foot: (j['foot'] ?? PressureConfig.foot).toString(),
+        zones: FootZones.fromJson(j['zones'] as Map<String, dynamic>?),
+        totalLoad: d('totalLoad'),
+        heelLoad: d('heelLoad'),
+        forefootLoad: d('forefootLoad'),
+        stability: d('stability'),
+        baselineUnderLoad: j['baselineUnderLoad'] == true,
+      );
+    }
+
+    // Legacy two-insole broadcast: {left, right, asymmetry, ...}. Show the
+    // configured study foot so the panel stays populated.
+    final legacy = PressureConfig.isLeft(null) ? j['left'] : j['right'];
+    return PlantarData(
+      foot: PressureConfig.foot,
+      zones: FootZones.fromJson(legacy as Map<String, dynamic>?),
+      totalLoad: d('totalLoad'),
+      heelLoad: d('heelLoad'),
+      forefootLoad: d('forefootLoad'),
+      stability: d('stability'),
+    );
+  }
 
   static PlantarData get demo => const PlantarData(
-    left:  FootZones(toe: 0.55, midInner: 0.40, midOuter: 0.35, heel: 0.80),
-    right: FootZones(toe: 0.60, midInner: 0.45, midOuter: 0.30, heel: 0.85),
-    totalLoad: 53.8, heelLoad: 82.5, forefootLoad: 57.5, asymmetry: 6.2, stability: 0.64,
+    foot: PressureConfig.foot,
+    zones: FootZones(toe: 0.60, medial: 0.45, lateral: 0.30, heel: 0.85),
+    totalLoad: 55.0, heelLoad: 85.0, forefootLoad: 45.0, stability: 0.64,
   );
 }
 
 class SensorStatus {
   final bool camera;
-  final bool pressureInsole;
+  final bool pressureInsole;   // FSR port is open (connected)
+  final bool pressureStreaming; // FSR pad data is actually arriving
   final bool eeg;
 
-  const SensorStatus({this.camera = false, this.pressureInsole = false, this.eeg = false});
+  const SensorStatus({
+    this.camera = false,
+    this.pressureInsole = false,
+    this.pressureStreaming = false,
+    this.eeg = false,
+  });
 
   factory SensorStatus.fromJson(Map<String, dynamic> j) => SensorStatus(
-    camera:         j['camera']         ?? false,
-    pressureInsole: j['pressureInsole'] ?? false,
-    eeg:            j['eeg']            ?? false,
+    camera:           j['camera']           ?? false,
+    pressureInsole:   j['pressureInsole']   ?? false,
+    pressureStreaming:j['pressureStreaming']?? false,
+    eeg:              j['eeg']              ?? false,
   );
 }
 

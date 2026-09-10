@@ -169,6 +169,10 @@ class UnityConnectionService extends ChangeNotifier {
   void pauseRecording() => sendCommand(UnityCommand('pause_recording'));
   void markEvent() => sendCommand(UnityCommand('mark_event'));
 
+  /// Re-capture the unloaded plantar-pressure baseline (Arduino 'Z'). Use during
+  /// preview after seating the insole; the Unity side ignores it once recording.
+  void requestBaseline() => sendCommand(UnityCommand('rebaseline'));
+
   /// Clock-sync ping — Unity echoes [pingId] in a `pong` with its record-clock
   /// time (see [onPong]). Cheap; safe to call several times per run.
   void sendPing(int pingId) => sendCommand(UnityCommand('ping', {'pingId': pingId}));

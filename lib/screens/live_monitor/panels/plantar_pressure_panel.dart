@@ -13,6 +13,9 @@ class PlantarPressurePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<UnityConnectionService>().state;
     final p = state.plantar;
+    final footLabel = p.foot.isEmpty
+        ? 'Foot'
+        : '${p.foot[0].toUpperCase()}${p.foot.substring(1)} Foot';
 
     return DashboardPanel(
       title: 'Plantar Pressure',
@@ -21,28 +24,29 @@ class PlantarPressurePanel extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(8),
         child: Column(children: [
-          // ── Foot zone maps + legend ────────────────────────────────
+          if (p.baselineUnderLoad) ...[
+            const _BaselineWarning(),
+            const SizedBox(height: 6),
+          ],
+          // ── Single foot zone map + legend ──────────────────────────
           Expanded(
             flex: 5,
             child: Row(children: [
-              Expanded(child: _FootZonesView(label: 'Left Foot', zones: p.left, isLeft: true)),
-              const SizedBox(width: 6),
-              Expanded(child: _FootZonesView(label: 'Right Foot', zones: p.right, isLeft: false)),
-              const SizedBox(width: 6),
+              const Spacer(),
+              Expanded(flex: 3, child: _FootZonesView(label: footLabel, zones: p.zones, isLeft: p.isLeft)),
+              const SizedBox(width: 8),
               _PressureLegend(),
+              const Spacer(),
             ]),
           ),
           const SizedBox(height: 6),
-          // ── Bottom: chart + metrics side by side ───────────────────
+          // ── Bottom: total-load chart + metrics side by side ────────
           Expanded(
             flex: 4,
             child: Row(children: [
               Expanded(
                 flex: 3,
-                child: _PressureTimeChart(
-                  history: state.pressureHistory,
-                  asymmetry: p.asymmetry,
-                ),
+                child: _PressureTimeChart(history: state.pressureHistory),
               ),
               const SizedBox(width: 10),
               SizedBox(width: 152, child: _MetricsColumn(p: p)),
@@ -50,6 +54,35 @@ class PlantarPressurePanel extends StatelessWidget {
           ),
         ]),
       ),
+    );
+  }
+}
+
+// ── Baseline-under-load warning banner ───────────────────────────────────────
+class _BaselineWarning extends StatelessWidget {
+  const _BaselineWarning();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.accentRed.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.accentRed.withValues(alpha: 0.5)),
+      ),
+      child: Row(children: [
+        Icon(Icons.warning_amber_rounded, color: AppColors.accentRed, size: 16),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            'Baseline captured under load. Remove foot and re-baseline.',
+            style: GoogleFonts.schibstedGrotesk(
+              color: AppColors.accentRed, fontSize: 10, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ]),
     );
   }
 }
@@ -92,10 +125,10 @@ class _FootZonesPainter extends CustomPainter {
   }
 
   // Normalised zone centres (x medial/lateral resolved by foot side, y toe→heel).
-  Offset _toe()   => const Offset(0.50, 0.13);
-  Offset _heel()  => const Offset(0.50, 0.85);
-  Offset _inner() => Offset(isLeft ? 0.66 : 0.34, 0.48); // medial
-  Offset _outer() => Offset(isLeft ? 0.34 : 0.66, 0.48); // lateral
+  Offset _toe()     => const Offset(0.50, 0.13);
+  Offset _heel()    => const Offset(0.50, 0.85);
+  Offset _medial()  => Offset(isLeft ? 0.66 : 0.34, 0.48);
+  Offset _lateral() => Offset(isLeft ? 0.34 : 0.66, 0.48);
 
   Path _footOutline(double w, double h) {
     final medX = isLeft ? w * 0.85 : w * 0.15;
@@ -127,10 +160,10 @@ class _FootZonesPainter extends CustomPainter {
         Paint()..color = const Color(0xFF0033CC).withValues(alpha: 0.22));
 
     final blobs = <(Offset, double, String)>[
-      (_toe(),   zones.toe,      'Toe'),
-      (_inner(), zones.midInner, 'Med'),
-      (_outer(), zones.midOuter, 'Lat'),
-      (_heel(),  zones.heel,     'Heel'),
+      (_toe(),     zones.toe,     'Toe'),
+      (_medial(),  zones.medial,  'Medial'),
+      (_lateral(), zones.lateral, 'Lateral'),
+      (_heel(),    zones.heel,    'Heel'),
     ];
 
     for (final (pos, v, _) in blobs) {
@@ -235,24 +268,18 @@ class _GradientBarPainter extends CustomPainter {
   @override bool shouldRepaint(_) => false;
 }
 
-// ── Pressure time chart — two lines (left + right) ───────────────────────────
+// ── Pressure time chart — single total-load line ─────────────────────────────
 class _PressureTimeChart extends StatelessWidget {
   final List<double> history;
-  final double asymmetry;
-  const _PressureTimeChart({required this.history, required this.asymmetry});
+  const _PressureTimeChart({required this.history});
 
   @override
   Widget build(BuildContext context) {
     if (history.length < 2) return const SizedBox();
 
-    final leftSpots = <FlSpot>[];
-    final rightSpots = <FlSpot>[];
-    for (int i = 0; i < history.length; i++) {
-      final total = history[i];
-      final ratio = (asymmetry / 200).clamp(-0.4, 0.4);
-      leftSpots.add(FlSpot(i.toDouble(), total * (0.5 - ratio)));
-      rightSpots.add(FlSpot(i.toDouble(), total * (0.5 + ratio)));
-    }
+    final spots = <FlSpot>[
+      for (int i = 0; i < history.length; i++) FlSpot(i.toDouble(), history[i]),
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,9 +289,7 @@ class _PressureTimeChart extends StatelessWidget {
             color: AppColors.inkMuted, fontSize: 8.5,
           )),
           const SizedBox(width: 8),
-          _LegendDot(AppColors.accentCyan, '← Left'),
-          const SizedBox(width: 6),
-          _LegendDot(AppColors.accentOrange, 'Right →'),
+          _LegendDot(AppColors.accentCyan, 'Total load'),
         ]),
         const SizedBox(height: 4),
         Expanded(
@@ -306,16 +331,10 @@ class _PressureTimeChart extends StatelessWidget {
               minY: 0, maxY: 100,
               lineBarsData: [
                 LineChartBarData(
-                  spots: leftSpots, isCurved: true, curveSmoothness: 0.35,
+                  spots: spots, isCurved: true, curveSmoothness: 0.35,
                   color: AppColors.accentCyan, barWidth: 1.8,
                   dotData: const FlDotData(show: false),
-                  belowBarData: BarAreaData(show: true, color: AppColors.accentCyan.withValues(alpha: 0.06)),
-                ),
-                LineChartBarData(
-                  spots: rightSpots, isCurved: true, curveSmoothness: 0.35,
-                  color: AppColors.accentOrange, barWidth: 1.8,
-                  dotData: const FlDotData(show: false),
-                  belowBarData: BarAreaData(show: true, color: AppColors.accentOrange.withValues(alpha: 0.06)),
+                  belowBarData: BarAreaData(show: true, color: AppColors.accentCyan.withValues(alpha: 0.08)),
                 ),
               ],
             ),
@@ -388,7 +407,6 @@ class _MetricsColumn extends StatelessWidget {
     ('Total Load',        '${p.totalLoad.toStringAsFixed(1)} %',    null, null),
     ('Heel Load',         '${p.heelLoad.toStringAsFixed(1)} %',     null, null),
     ('Forefoot Load',     '${p.forefootLoad.toStringAsFixed(1)} %', null, null),
-    ('L / R Asymmetry',   '${p.asymmetry.toStringAsFixed(1)} %',    null, null),
     ('Stability (COP)',
       '${p.stability.toStringAsFixed(2)} cm',
       p.stability < 1.0 ? AppColors.accentGreen : AppColors.accentOrange,

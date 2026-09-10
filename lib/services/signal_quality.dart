@@ -64,12 +64,12 @@ SignalReport assessSignalQuality(
   }
 
   if (fsr) {
-    final load = s.plantar.left.sum + s.plantar.right.sum;
+    final load = s.plantar.zones.sum;
     if (load <= 0) {
-      out.add(const SensorSignal('Pressure insoles', SignalLevel.warn,
+      out.add(const SensorSignal('Pressure insole', SignalLevel.warn,
           'Reading zero — check the insole COM port / contact'));
     } else {
-      out.add(SensorSignal('Pressure insoles', SignalLevel.ok,
+      out.add(SensorSignal('Pressure insole', SignalLevel.ok,
           'Load ${s.plantar.totalLoad.toStringAsFixed(0)}%'));
     }
   }

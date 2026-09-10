@@ -7,6 +7,7 @@ import '../../services/app_settings.dart';
 import '../../services/exercise_record_controller.dart';
 import '../../services/exercise_repository.dart';
 import '../../services/unity_connection_service.dart';
+import '../../services/unity_launch_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/sensor_warmup_loader.dart';
 import '../../widgets/skeleton_3d_view.dart';
@@ -34,6 +35,7 @@ class _ExerciseRecordScreenState extends State<ExerciseRecordScreen> {
       settings: context.read<AppSettings>(),
       exercises: context.read<ExerciseRepository>(),
       name: widget.name,
+      launcher: context.read<UnityLaunchService>(),
     )..addListener(_onChange);
     _conn.addListener(_onChange);
     WidgetsBinding.instance.addPostFrameCallback((_) => _ctrl.prepare());

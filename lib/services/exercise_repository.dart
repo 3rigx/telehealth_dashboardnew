@@ -120,6 +120,21 @@ class ExerciseRepository extends ChangeNotifier {
     return finished;
   }
 
+  /// Create an "uploaded media" exercise by copying a gif/webp/video file into
+  /// the exercise folder. It is rendered directly (looping image or video),
+  /// not as an avatar, wherever a guide is shown.
+  Future<ExerciseAsset> importMedia(String name, String srcPath) async {
+    final ext = srcPath.contains('.') ? srcPath.split('.').last.toLowerCase() : 'bin';
+    final clip = 'media.$ext';
+    final asset =
+        ExerciseAsset(name: name, source: ExerciseSource.uploaded, clipFile: clip);
+    final dir = Directory(_dirFor(asset.id));
+    if (!await dir.exists()) await dir.create(recursive: true);
+    await File(srcPath).copy('${dir.path}${Platform.pathSeparator}$clip');
+    await save(asset);
+    return asset;
+  }
+
   /// Load a recorded exercise's skeleton frames for avatar playback (rebuilding
   /// the timeline exactly as the replay loader does).
   Future<List<SkeletonFrame>> loadFrames(ExerciseAsset e) async {

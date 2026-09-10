@@ -7,6 +7,7 @@ import '../../models/exercise_asset.dart';
 import '../../services/exercise_repository.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/avatar_guide_player.dart';
+import '../../widgets/exercise_media_view.dart';
 import 'exercise_record_screen.dart';
 
 /// Library of authored exercises. Each exercise is a reusable reference movement
@@ -64,9 +65,15 @@ class ExerciseLibraryScreen extends StatelessWidget {
           ]),
           const Spacer(),
           OutlinedButton.icon(
+            onPressed: () => _uploadMedia(context, repo),
+            icon: const Icon(Icons.gif_box_outlined, size: 18),
+            label: const Text('Upload media'),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
             onPressed: () => _importFromRecording(context, repo),
             icon: const Icon(Icons.upload_file, size: 18),
-            label: const Text('Import'),
+            label: const Text('Import recording'),
           ),
           const SizedBox(width: 10),
           FilledButton.icon(
@@ -102,9 +109,9 @@ class ExerciseLibraryScreen extends StatelessWidget {
           const SizedBox(height: 20),
           Row(mainAxisSize: MainAxisSize.min, children: [
             OutlinedButton.icon(
-              onPressed: () => _importFromRecording(context, repo),
-              icon: const Icon(Icons.upload_file, size: 18),
-              label: const Text('Import a recording'),
+              onPressed: () => _uploadMedia(context, repo),
+              icon: const Icon(Icons.gif_box_outlined, size: 18),
+              label: const Text('Upload media'),
             ),
             const SizedBox(width: 12),
             FilledButton.icon(
@@ -144,6 +151,28 @@ class ExerciseLibraryScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Import failed: $e')));
+      }
+    }
+  }
+
+  /// Upload a GIF / WebP / video clip as a reusable "media" exercise guide.
+  Future<void> _uploadMedia(
+      BuildContext context, ExerciseRepository repo) async {
+    final res = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Select a GIF, WebP or video clip',
+      type: FileType.custom,
+      allowedExtensions: ExerciseMediaView.pickerExtensions,
+    );
+    final path = res?.files.single.path;
+    if (path == null || !context.mounted) return;
+    final name = await _promptName(context);
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await repo.importMedia(name.trim(), path);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       }
     }
   }

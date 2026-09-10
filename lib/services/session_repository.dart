@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
+import '../models/pressure_config.dart';
 import '../models/protocol.dart';
 import '../models/session_models.dart';
 import '../models/skeleton_3d.dart';
@@ -114,19 +115,44 @@ class SessionRepository extends ChangeNotifier {
     }
 
     // ---- fsr.csv ----
+    // Self-describing: the header tells the layout so both eras open regardless of
+    // the manifest. v2 (single insole) = "timestamp_utc,arduino_ms,t_ms,toe,medial,
+    // lateral,heel" with an ALREADY-ABSOLUTE t_ms; v1 (legacy two insoles) =
+    // "...,L_toe,...,R_heel" with a per-row DELTA t_ms.
+    var fsrAbsolute = false;
+    final recordFoot = summary.manifest.fsr.foot.isEmpty
+        ? PressureConfig.foot
+        : summary.manifest.fsr.foot;
     try {
       final f = File('${summary.folderPath}${sep}fsr.csv');
       if (await f.exists()) {
         final lines = await f.readAsLines();
+        final header = lines.isNotEmpty ? lines.first.toLowerCase() : '';
+        final singleFoot = header.contains('arduino_ms') || !header.contains('l_toe');
+        double p(String s) => double.tryParse(s) ?? 0;
+
         for (var i = 1; i < lines.length; i++) {
           final c = lines[i].split(',');
-          if (c.length < 10) continue;
-          double p(String s) => double.tryParse(s) ?? 0;
-          rawFsr.add((
-            int.tryParse(c[1]) ?? 0,
-            FootZones(toe: p(c[2]), midInner: p(c[3]), midOuter: p(c[4]), heel: p(c[5])),
-            FootZones(toe: p(c[6]), midInner: p(c[7]), midOuter: p(c[8]), heel: p(c[9])),
-          ));
+          if (singleFoot) {
+            // timestamp_utc, arduino_ms, t_ms, toe, medial, lateral, heel
+            if (c.length < 7) continue;
+            fsrAbsolute = true;
+            final zones = FootZones(toe: p(c[3]), medial: p(c[4]), lateral: p(c[5]), heel: p(c[6]));
+            final empty = const FootZones();
+            rawFsr.add((
+              int.tryParse(c[2]) ?? 0, // t_ms, absolute
+              PressureConfig.isLeft(recordFoot) ? zones : empty,
+              PressureConfig.isLeft(recordFoot) ? empty : zones,
+            ));
+          } else {
+            // Legacy two-insole: timestamp_utc, t_ms(delta), L_*(4), R_*(4)
+            if (c.length < 10) continue;
+            rawFsr.add((
+              int.tryParse(c[1]) ?? 0,
+              FootZones(toe: p(c[2]), medial: p(c[3]), lateral: p(c[4]), heel: p(c[5])),
+              FootZones(toe: p(c[6]), medial: p(c[7]), lateral: p(c[8]), heel: p(c[9])),
+            ));
+          }
         }
       }
     } catch (e) {
@@ -183,7 +209,11 @@ class SessionRepository extends ChangeNotifier {
     }
 
     final frameTimes = cumulativeTimeline([for (final r in rawSkeletons) r.$1]);
-    final fsrTimes = cumulativeTimeline([for (final r in rawFsr) r.$1]);
+    // v2 single-foot rows carry an already-absolute t_ms (Arduino clock), so pass
+    // them through unchanged; v1 rows are per-frame deltas needing accumulation.
+    final fsrTimes = fsrAbsolute
+        ? [for (final r in rawFsr) r.$1]
+        : cumulativeTimeline([for (final r in rawFsr) r.$1]);
 
     final frames = [
       for (var i = 0; i < rawSkeletons.length; i++)

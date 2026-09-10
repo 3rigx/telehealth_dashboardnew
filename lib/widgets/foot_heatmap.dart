@@ -91,8 +91,8 @@ class _FootPainter extends CustomPainter {
 
     final blobs = <(Offset, double, String)>[
       (_toe(), zones.toe, 'Toe'),
-      (_inner(), zones.midInner, 'Med'),
-      (_outer(), zones.midOuter, 'Lat'),
+      (_inner(), zones.medial, 'Medial'),
+      (_outer(), zones.lateral, 'Lateral'),
       (_heel(), zones.heel, 'Heel'),
     ];
 

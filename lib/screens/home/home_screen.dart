@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../models/participant.dart';
 import '../../services/app_settings.dart';
+import '../../services/participant_repository.dart';
 import '../../services/session_repository.dart';
 import '../../services/unity_connection_service.dart';
 import '../../services/unity_launch_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/participant_picker.dart';
 
 /// Landing screen: pick what to do (Live Exercise / Replay / Prediction),
 /// then — for live modes — configure the session (patient, class, sensors)
@@ -29,6 +32,10 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<UnityLaunchService>().init();
       context.read<SessionRepository>().refresh();
+      // First launch → show the setup guide once (reopenable from Settings).
+      if (!context.read<AppSettings>().onboardingSeen) {
+        Navigator.pushNamed(context, '/onboarding');
+      }
     });
   }
 
@@ -53,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPrediction: () => setState(() => _setupMode = 'Prediction'),
               onProtocols: () => Navigator.pushNamed(context, '/protocols'),
               onExercises: () => Navigator.pushNamed(context, '/exercises'),
+              onParticipants: () => Navigator.pushNamed(context, '/participants'),
               onSettings: () => Navigator.pushNamed(context, '/settings'),
               activeMode: _setupMode,
             ),
@@ -78,7 +86,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _LeftRail extends StatelessWidget {
   final VoidCallback onExercise, onReplay, onPrediction, onProtocols,
-      onExercises, onSettings;
+      onExercises, onParticipants, onSettings;
   final String? activeMode;
   const _LeftRail({
     required this.onExercise,
@@ -86,6 +94,7 @@ class _LeftRail extends StatelessWidget {
     required this.onPrediction,
     required this.onProtocols,
     required this.onExercises,
+    required this.onParticipants,
     required this.onSettings,
     this.activeMode,
   });
@@ -101,6 +110,11 @@ class _LeftRail extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(28),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Nav cards scroll when the window is short; the status/version footer
+          // stays pinned below, so the rail never overflows.
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Container(
               width: 40,
@@ -182,14 +196,26 @@ class _LeftRail extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _NavCard(
+            icon: Icons.badge_outlined,
+            title: 'Participants',
+            subtitle: 'Enrol with consent,\ncodes & data export',
+            color: const Color(0xFFE0B252),
+            onTap: onParticipants,
+            delay: 260,
+          ),
+          const SizedBox(height: 10),
+          _NavCard(
             icon: Icons.settings_outlined,
             title: 'Settings',
             subtitle: 'FSR port, sensors,\nmock data, folders',
             color: const Color(0xFF8A9BB5),
             onTap: onSettings,
-            delay: 240,
+            delay: 280,
           ),
-          const Spacer(),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
           _StatusLine(
             label: 'Unity',
             color: conn.isConnected
@@ -401,9 +427,13 @@ class _SessionSetupPanelState extends State<SessionSetupPanel> {
   @override
   void initState() {
     super.initState();
-    _patientCtrl =
-        TextEditingController(text: context.read<AppSettings>().lastPatientId);
-    // Pre-load trial numbers for the picked patient.
+    // Prefill only if the remembered ID is an enrolled, active participant —
+    // legacy free-text IDs are not selectable any more (privacy enforcement).
+    final last = context.read<AppSettings>().lastPatientId;
+    final enrolled = context.read<ParticipantRepository>().byCode(last);
+    _patientCtrl = TextEditingController(
+        text: enrolled?.status == ParticipantStatus.active ? last : '');
+    // Pre-load trial numbers for the picked participant.
     final repo = context.read<SessionRepository>();
     if (_patientCtrl.text.isNotEmpty) repo.loadSessions(_patientCtrl.text);
   }
@@ -418,8 +448,12 @@ class _SessionSetupPanelState extends State<SessionSetupPanel> {
   String get _patientId => _patientCtrl.text.trim();
 
   Future<void> _start({required bool mockOnly}) async {
-    if (_patientId.isEmpty) {
-      setState(() => _status = 'Enter or pick a patient ID first.');
+    // Strict pseudonymity: only an enrolled, consented, active participant
+    // code may reach Unity / folder names — never free text.
+    final registry = context.read<ParticipantRepository>();
+    if (_patientId.isEmpty ||
+        registry.byCode(_patientId)?.status != ParticipantStatus.active) {
+      setState(() => _status = 'Select an enrolled participant first.');
       return;
     }
     final settings = context.read<AppSettings>();
@@ -544,65 +578,58 @@ class _SessionSetupPanelState extends State<SessionSetupPanel> {
         ),
         Expanded(
           child: ListView(padding: const EdgeInsets.all(24), children: [
-            // ── patient ────────────────────────────────────────────────────
-            _sectionLabel('PATIENT'),
+            // ── participant (strict: enrolled codes only, never typed) ─────
+            _sectionLabel('PARTICIPANT'),
             const SizedBox(height: 8),
-            TextField(
-              controller: _patientCtrl,
-              onChanged: (v) {
-                setState(() {});
-                if (v.trim().isNotEmpty) repo.loadSessions(v.trim());
+            InkWell(
+              onTap: () async {
+                final code = await pickParticipant(context,
+                    initial: _patientId.isEmpty ? null : _patientId);
+                if (code != null && mounted) {
+                  _patientCtrl.text = code;
+                  repo.loadSessions(code);
+                  setState(() {});
+                }
               },
-              style: GoogleFonts.schibstedGrotesk(color: AppColors.textPrimary, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'Type a new patient ID, or pick an existing one below',
-                hintStyle: GoogleFonts.schibstedGrotesk(color: AppColors.textSecondary, fontSize: 12),
-                prefixIcon:
-                    const Icon(Icons.person_outline, size: 18, color: AppColors.accent),
-                filled: true,
-                fillColor: AppColors.surfaceLight,
-                border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceLight,
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: AppColors.border),
+                  border: Border.all(color: AppColors.border),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: AppColors.border),
-                ),
-              ),
-            ),
-            if (repo.patients.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final p in repo.patients)
-                  InkWell(
-                    onTap: () {
-                      _patientCtrl.text = p;
-                      repo.loadSessions(p);
-                      setState(() {});
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _patientId == p
-                            ? AppColors.accent.withValues(alpha: 0.2)
-                            : AppColors.surfaceLight,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: _patientId == p ? AppColors.accent : AppColors.border),
-                      ),
-                      child: Text(p,
-                          style: GoogleFonts.schibstedGrotesk(
-                              color: _patientId == p
-                                  ? AppColors.accent
-                                  : AppColors.textPrimary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600)),
+                child: Row(children: [
+                  const Icon(Icons.badge_outlined,
+                      size: 18, color: AppColors.accent),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _patientId.isEmpty
+                          ? 'Select an enrolled participant…'
+                          : _patientId,
+                      style: GoogleFonts.schibstedGrotesk(
+                          color: _patientId.isEmpty
+                              ? AppColors.textSecondary
+                              : AppColors.textPrimary,
+                          fontSize: 13,
+                          fontWeight: _patientId.isEmpty
+                              ? FontWeight.w400
+                              : FontWeight.w600),
                     ),
                   ),
-              ]),
-            ],
+                  Icon(Icons.unfold_more,
+                      size: 16, color: AppColors.textSecondary),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Participants are enrolled (with consent) in the Participants section — codes only, no names.',
+              style: GoogleFonts.schibstedGrotesk(
+                  color: AppColors.textSecondary, fontSize: 10),
+            ),
             const SizedBox(height: 22),
 
             // ── exercise class ─────────────────────────────────────────────

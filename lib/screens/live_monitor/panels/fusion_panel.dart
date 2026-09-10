@@ -8,6 +8,14 @@ import '../../../services/unity_connection_service.dart';
 import '../../../models/telerehab_state.dart';
 import '../../../theme/app_theme.dart';
 
+/// Mediolateral load imbalance for a single insole: 0 % = evenly split medial/
+/// lateral, 100 % = all on one edge. Replaces the two-foot L/R asymmetry.
+double _mlBalance(PlantarData p) {
+  final ml = p.zones.medial + p.zones.lateral;
+  if (ml <= 1e-6) return 0;
+  return (p.zones.medial - p.zones.lateral).abs() / ml * 100;
+}
+
 class FusionPanel extends StatelessWidget {
   const FusionPanel({super.key});
 
@@ -66,11 +74,11 @@ class FusionPanel extends StatelessWidget {
             ('Total Load (%BW)',      p.totalLoad.toStringAsFixed(1)),
             ('Heel Load (%BW)',       p.heelLoad.toStringAsFixed(1)),
             ('Forefoot Load (%BW)',   p.forefootLoad.toStringAsFixed(1)),
-            ('L/R Asymmetry (%)',     p.asymmetry.toStringAsFixed(1)),
+            ('Med/Lat Balance (%)',   _mlBalance(p).toStringAsFixed(1)),
             ('Stability (COP SD, cm)',p.stability.toStringAsFixed(2)),
           ],
           statuses: [null, null, null,
-            p.asymmetry < 15 ? _RowStatus.good : _RowStatus.warn,
+            _mlBalance(p) < 15 ? _RowStatus.good : _RowStatus.warn,
             p.stability  < 1 ? _RowStatus.good : _RowStatus.warn,
           ],
         )),

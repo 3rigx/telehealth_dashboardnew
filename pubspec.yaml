@@ -41,6 +41,11 @@ dependencies:
   shared_preferences: ^2.3.0
   file_picker: ^8.1.4
   archive: ^3.6.1
+  # Desktop-capable video playback for uploaded exercise-guide clips (mp4/mov/webm).
+  # video_player has no Windows support; media_kit bundles libmpv for Windows.
+  media_kit: ^1.1.10
+  media_kit_video: ^1.2.4
+  media_kit_libs_windows_video: ^1.0.9
 
 dev_dependencies:
   flutter_test:

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'app_settings.dart';
 import 'exercise_repository.dart';
 import 'unity_connection_service.dart';
+import 'unity_launch_service.dart';
 
 enum RecordStage {
   idle,
@@ -29,6 +30,10 @@ class ExerciseRecordController extends ChangeNotifier {
   final ExerciseRepository exercises;
   final String name;
 
+  /// When provided, [prepare] launches the Unity player itself if it isn't
+  /// already running.
+  final UnityLaunchService? launcher;
+
   RecordStage stage = RecordStage.idle;
   String message = '';
   String? savedExerciseId;
@@ -44,6 +49,7 @@ class ExerciseRecordController extends ChangeNotifier {
     required this.settings,
     required this.exercises,
     required this.name,
+    this.launcher,
   });
 
   int get elapsedMs => _watch.elapsed.inMilliseconds;
@@ -55,13 +61,16 @@ class ExerciseRecordController extends ChangeNotifier {
   }
 
   Future<void> prepare() async {
-    if (!conn.isConnected) {
-      _set(RecordStage.connecting, 'Connecting to Unity…');
-      await conn.connect(settings.wsUri);
-    }
-    if (!conn.isConnected) {
-      _set(RecordStage.error,
-          'Unity is not running. Start Unity, then try again.');
+    // Attach to a running Unity, or launch the configured/bundled player —
+    // recording must work from a cold start, like the home-screen flow.
+    final err = await ensureUnityConnected(
+      conn: conn,
+      settings: settings,
+      launcher: launcher,
+      onStatus: (m) => _set(RecordStage.connecting, m),
+    );
+    if (err != null) {
+      _set(RecordStage.error, err);
       return;
     }
 

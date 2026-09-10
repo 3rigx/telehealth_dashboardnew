@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Windows installer build artifacts (payloads are copied/downloaded, not sources)
+/installer/Output/
+/installer/unity_payload/
+/installer/portable_stage/
+/installer/redist/

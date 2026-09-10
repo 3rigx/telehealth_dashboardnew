@@ -8,6 +8,7 @@ import 'app_settings.dart';
 import 'protocol_runner.dart';
 import 'signal_quality.dart';
 import 'unity_connection_service.dart';
+import 'unity_launch_service.dart';
 
 enum RunStage { idle, connecting, preparing, ready, recording, saving, done, error }
 
@@ -24,6 +25,10 @@ class ProtocolRunController extends ChangeNotifier {
   final AppSettings settings;
   final Protocol protocol;
   final String participantId;
+
+  /// When provided, [prepare] launches the Unity player itself if it isn't
+  /// already running (same behaviour as the home-screen session setup).
+  final UnityLaunchService? launcher;
   final ProtocolRunner runner = ProtocolRunner();
 
   RunStage stage = RunStage.idle;
@@ -56,6 +61,7 @@ class ProtocolRunController extends ChangeNotifier {
     required this.settings,
     required this.protocol,
     required this.participantId,
+    this.launcher,
   });
 
   void _set(RunStage s, [String msg = '']) {
@@ -67,13 +73,18 @@ class ProtocolRunController extends ChangeNotifier {
   /// Connect (if needed), push config, and load the capture scene so the
   /// operator can position the participant before recording.
   Future<void> prepare() async {
-    if (!conn.isConnected) {
-      _set(RunStage.connecting, 'Connecting to Unity…');
-      await conn.connect(settings.wsUri);
-    }
-    if (!conn.isConnected) {
+    // Attach to a running Unity, or launch the configured/bundled player and
+    // wait for the bridge — Run live must work from a cold start, exactly
+    // like the home-screen flow.
+    final err = await ensureUnityConnected(
+      conn: conn,
+      settings: settings,
+      launcher: launcher,
+      onStatus: (m) => _set(RunStage.connecting, m),
+    );
+    if (err != null) {
       _set(RunStage.error,
-          'Unity is not running. Start Unity (or use Rehearse for a no-hardware run).');
+          '$err (Or use Rehearse for a no-hardware run.)');
       return;
     }
 
@@ -92,6 +103,7 @@ class ProtocolRunController extends ChangeNotifier {
       'zed': protocol.sensorZed,
       'fsr': protocol.sensorFsr,
       'eeg': protocol.sensorEeg,
+      'eegComPort': settings.eegComPort,
       'fsrConnType': settings.fsrConnType,
       'fsrUsbPort': settings.fsrUsbPort,
       'fsrUri': settings.fsrUri,
@@ -195,6 +207,11 @@ class ProtocolRunController extends ChangeNotifier {
   }
 
   void _appendMarker(RunMarker m) {
+    // Tell Unity to emit an Arduino #MARK on the SAME event that writes a protocol
+    // marker, so plantar pressure (pressure_markers.csv, Arduino clock) can be aligned
+    // to EEG / skeleton. Fire-and-forget; alignment is by the Arduino timestamp.
+    conn.markEvent();
+
     final f = _partialMarkers;
     if (f == null) return;
     try {

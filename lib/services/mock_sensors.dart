@@ -1,4 +1,5 @@
 import 'dart:math';
+import '../models/pressure_config.dart';
 import '../models/session_models.dart';
 import '../models/skeleton_3d.dart';
 import '../models/telerehab_state.dart';
@@ -34,39 +35,29 @@ class MockSensors {
   static Skeleton3D skeletonAt(double tSec) =>
       Skeleton3D.seatedDemo(kneeAngleDeg: kneeAngleAt(tSec));
 
-  /// Plantar pressure for both feet, normalised 0..1. During extension the
-  /// active (right) heel unloads and the left side takes more weight.
-  static (FootZones left, FootZones right) fsrAt(double tSec) {
+  /// Single-insole plantar pressure, normalised 0..1: a heel→toe roll that
+  /// shifts weight forward as the knee extends.
+  static FootZones fsrAt(double tSec) {
     final angle = kneeAngleAt(tSec);
     final k = (80 - angle) / 65; // 0 rest .. 1 extended
     final sway = 0.04 * sin(tSec * 1.7);
 
-    final left = FootZones(
-      toe: (0.35 + 0.25 * k + sway).clamp(0.0, 1.0),
-      midInner: (0.30 + 0.15 * k).clamp(0.0, 1.0),
-      midOuter: (0.28 + 0.12 * k - sway).clamp(0.0, 1.0),
-      heel: (0.65 + 0.20 * k).clamp(0.0, 1.0),
+    return FootZones(
+      toe: (0.40 + 0.30 * k + sway).clamp(0.0, 1.0),
+      medial: (0.32 + 0.16 * k).clamp(0.0, 1.0),
+      lateral: (0.30 + 0.12 * k - sway).clamp(0.0, 1.0),
+      heel: (0.70 - 0.30 * k).clamp(0.0, 1.0),
     );
-    final right = FootZones(
-      toe: (0.40 - 0.25 * k - sway).clamp(0.0, 1.0),
-      midInner: (0.32 - 0.18 * k).clamp(0.0, 1.0),
-      midOuter: (0.30 - 0.15 * k + sway).clamp(0.0, 1.0),
-      heel: (0.70 - 0.45 * k).clamp(0.0, 1.0),
-    );
-    return (left, right);
   }
 
   static PlantarData plantarAt(double tSec, {List<double>? history}) {
-    final (left, right) = fsrAt(tSec);
-    final total = (left.sum + right.sum) / 8 * 100;
-    final asym = ((left.sum - right.sum) / max(0.001, left.sum + right.sum)).abs() * 100;
+    final z = fsrAt(tSec);
     return PlantarData(
-      left: left,
-      right: right,
-      totalLoad: total,
-      heelLoad: (left.heel + right.heel) / 2 * 100,
-      forefootLoad: (left.forefoot + right.forefoot) / 2 * 100,
-      asymmetry: asym,
+      foot: PressureConfig.foot,
+      zones: z,
+      totalLoad: z.sum / 4 * 100,
+      heelLoad: z.heel * 100,
+      forefootLoad: z.forefoot * 100,
       stability: 0.4 + 0.3 * sin(tSec * 0.6).abs(),
     );
   }
@@ -110,8 +101,13 @@ class MockSensors {
       final tSec = i / hz;
       final tMs = (tSec * 1000).round();
       frames.add(SkeletonFrame(tMs: tMs, skeleton: skeletonAt(tSec)));
-      final (left, right) = fsrAt(tSec);
-      fsr.add(FsrSample(tMs: tMs, left: left, right: right));
+      final z = fsrAt(tSec);
+      const empty = FootZones();
+      fsr.add(FsrSample(
+        tMs: tMs,
+        left: PressureConfig.isLeft(PressureConfig.foot) ? z : empty,
+        right: PressureConfig.isLeft(PressureConfig.foot) ? empty : z,
+      ));
     }
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
@@ -124,6 +120,7 @@ class MockSensors {
         sessionId: sessionId,
         folderPath: '',
         manifest: RecordedManifest(
+          schemaVersion: 2,
           patientId: 'MOCK',
           sessionId: sessionId,
           exerciseClass: 'Motion',
@@ -133,7 +130,8 @@ class MockSensors {
           zed: SensorEntry(
               enabled: true, source: 'mock', file: '', sampleRateHz: hz, sampleCount: n),
           fsr: SensorEntry(
-              enabled: true, source: 'mock', file: '', sampleRateHz: hz, sampleCount: n),
+              enabled: true, source: 'mock', file: '', sampleRateHz: hz, sampleCount: n,
+              insoleCount: 1, foot: PressureConfig.foot, channelNames: PressureConfig.channelNames),
         ),
       ),
       frames: frames,

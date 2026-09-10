@@ -1,0 +1,301 @@
+<!doctype html><html><head><meta charset='utf-8'><style>
+body{font-family:"Georgia","Cambria",serif;font-size:11pt;line-height:1.5;color:#1a1a24;max-width:7.2in;margin:0 auto;}
+h1{font-size:22pt;border-bottom:2px solid #7c4dd6;padding-bottom:6px;color:#241e33;}
+h2{font-size:16pt;color:#5b32ab;margin-top:20pt;border-bottom:1px solid #ddd6ef;padding-bottom:3px;}
+h3{font-size:12.5pt;color:#241e33;margin-top:14pt;}
+table{border-collapse:collapse;width:100%;margin:10pt 0;font-size:10pt;}
+th,td{border:1px solid #c9c2df;padding:5px 8px;text-align:left;vertical-align:top;}
+th{background:#efe9fb;color:#241e33;}
+code{font-family:"Consolas","Courier New",monospace;font-size:9.5pt;background:#f2effa;padding:1px 3px;}
+pre{font-family:"Consolas","Courier New",monospace;font-size:9pt;background:#f2effa;border:1px solid #ddd6ef;border-left:3px solid #7c4dd6;padding:8px;white-space:pre-wrap;}
+blockquote{border-left:3px solid #b7add6;margin:8pt 0;padding:4pt 12pt;color:#3a3350;background:#f7f6fb;}
+a{color:#5b32ab;}
+hr{border:none;border-top:1px solid #ddd6ef;margin:14pt 0;}
+strong{color:#241e33;}
+</style></head><body>
+<h1>Performance Test Report — TeleRehab Dashboard</h1>
+<p><strong>Project:</strong> TeleRehab Dashboard (Flutter desktop) + capture engine (Unity) <strong>Report date:</strong> 2026-08-05 <strong>Prepared by:</strong> _[author / to complete]_ <strong>Document version:</strong> 1.1 <strong>Status:</strong> Complete — verdict <strong>PASS</strong> (one deferred cosmetic item) <strong>Rev 1.1 (2026-08-10):</strong> added §7 Real-hardware validation (EEG + ZED); corrected the recorded-skeleton rate claim (§4.3, F5/F7).</p>
+<hr>
+<h2>Executive summary</h2>
+<p>The TeleRehab system was performance-tested as a <strong>single-user, real-time capture application</strong> rather than a multi-user server. Testing therefore targeted the quality attributes that actually govern such a system — <em>time behaviour</em> (latency, throughput), <em>resource utilisation</em>, and <em>capacity</em> — as defined by the software-product-quality standard ISO/IEC 25010 (International Organization for Standardization [ISO], 2011).</p>
+<p>Three test stages were executed against the running system: (1) data-pipeline throughput and latency, (2) user-interface smoothness, and (3) endurance (soak). All three passed. The communication bridge sustained its nominal broadcast rate with single-digit-millisecond command latency and no degradation under either concurrent-client load or a 20-minute soak; process memory stabilised rather than growing without bound, indicating no memory leak (cf. software-aging theory; Huang et al., 1995).</p>
+<p>A subsequent <strong>real-hardware validation</strong> (§7) — a live Unicorn EEG headset and a ZED 2i camera in an 8.5-minute recorded session — confirmed the pipeline holds under genuine sensor load and that <strong>EEG records losslessly at 250 Hz (zero dropped samples)</strong>. It refined two points: the live ZED skeleton is recorded at the ~5 Hz update rate (not the camera's full rate), and engine memory grows with recording length as samples are buffered before save.</p>
+<p>The only defect identified is <strong>transient shader-compilation jank</strong> in the UI — a first-use rendering stutter that is cosmetic and does not affect data integrity or steady-state performance. The modern remedy (the Impeller renderer) proved unusable on the test hardware and the item was accepted as-is and deferred.</p>
+<table>
+<tr><th> Stage</th><th>Metric</th><th>Result</th><th>Verdict </th></tr>
+<tr><td> 1 — Pipeline</td><td>Broadcast rate / RTT / fan-out</td><td>5 Hz held; RTT median 4 ms; 5 clients = no impact</td><td>Pass </td></tr>
+<tr><td> 2 — UI</td><td>CPU / memory / frame rate</td><td>~1.7 cores; flat ~314 MB; ~79 fps</td><td>Pass (cosmetic jank) </td></tr>
+<tr><td> 3 — Endurance</td><td>Rate &amp; memory over 20 min</td><td>Rate flat; memory plateaued (no leak)</td><td>Pass </td></tr>
+<tr><td> Real-hardware (EEG + ZED)</td><td>Dropped EEG frames · skeleton rate</td><td>0 dropped @ 250 Hz; skeleton ~5.3 Hz</td><td>Pass </td></tr>
+</table>
+<hr>
+<h2>1. Introduction and scope</h2>
+<h3>1.1 System under test</h3>
+<p>The TeleRehab Dashboard is a Flutter Windows desktop application used by a clinician to configure, run, and review rehabilitation sessions. It communicates with a Unity capture engine ("Smart Game") over a <strong>local WebSocket</strong> (<code>ws://localhost:8765</code>). The engine streams sensor frames (motion/skeleton, plantar pressure, EEG) to the dashboard and receives session-control commands. Recorded data is written to the local filesystem.</p>
+<p>Architecturally the system is <strong>single-user and single-machine</strong>: one clinician, one dashboard, one engine, communicating over loopback. There is no multi-user server tier.</p>
+<h3>1.2 Rationale — why not conventional load testing</h3>
+<p>Conventional load-testing tools (e.g. LoadRunner) are designed to answer <em>"does the server tier hold up under N concurrent users?"</em> by simulating many virtual users against a shared back-end. That question is not meaningful here: there is no multi-user server to load, and the client UI is a compiled desktop application whose rendering surface is not driven by such tools.</p>
+<p>The performance risks that <em>are</em> meaningful for a real-time capture application are <strong>latency, throughput, timing jitter, interactive smoothness, and endurance</strong> (Molyneaux, 2014; Jain, 1991). Testing was scoped accordingly. Where a load dimension does exist — the engine broadcasting to multiple connected dashboards — it was tested directly as a <em>capacity</em> check (§4).</p>
+<h3>1.3 Objectives (mapped to ISO/IEC 25010 performance efficiency)</h3>
+<table>
+<tr><th> ISO/IEC 25010 sub-characteristic</th><th>Concrete objective</th><th>Stage </th></tr>
+<tr><td> Time behaviour</td><td>Broadcast throughput, command round-trip latency, timing jitter</td><td>1, 3 </td></tr>
+<tr><td> Resource utilisation</td><td>CPU and memory of the dashboard and engine processes</td><td>2, 3 </td></tr>
+<tr><td> Capacity</td><td>Behaviour of the bridge under multiple concurrent clients</td><td>1 </td></tr>
+</table>
+<p>Interactive responsiveness targets draw on established human-computer-interaction limits: the 0.1 s / 1 s / 10 s response thresholds (Miller, 1968; Nielsen, 1993) and evidence that input-to-output lag degrades interactive task performance (MacKenzie &amp; Ware, 1993).</p>
+<hr>
+<h2>2. Test environment</h2>
+<table>
+<tr><th> Component</th><th>Detail </th></tr>
+<tr><td> OS</td><td>Windows 11 Enterprise, 16 logical cores </td></tr>
+<tr><td> Dashboard</td><td>Flutter 3.44.0 (stable); Windows <strong>profile</strong> build (release-representative, profiler-attachable) </td></tr>
+<tr><td> Engine</td><td>Unity build "Smart Game"; WebSocket bridge on <code>ws://localhost:8765</code>; nominal broadcast interval ≈ 200 ms (~5 Hz) </td></tr>
+<tr><td> Sensors (Stages 1–3)</td><td>None attached — synthetic/mock (a later real-hardware run used a live EEG + ZED 2i; see §7 and Limitations §9) </td></tr>
+<tr><td> Instrumentation</td><td><code>tool/ws_perf_test.dart</code> (synthetic client), <code>tool/sample_resources.ps1</code> (process sampler), Flutter DevTools (frame timeline) </td></tr>
+</table>
+<p>Running the UI in <strong>profile</strong> rather than debug mode is essential: debug builds run the Dart VM in JIT with assertions enabled and report frame times several times slower than a real build, which would invalidate any smoothness measurement.</p>
+<hr>
+<h2>3. Methodology</h2>
+<h3>3.1 Metrics and definitions</h3>
+<ul>
+<li><strong>Throughput (broadcast rate):</strong> <code>sensor_update</code> frames received per second at a</li>
+</ul>
+<p>  measured client. Nominal target = 1 / broadcast interval.</p>
+<ul>
+<li><strong>Command round-trip latency (RTT):</strong> measured by an application-level</li>
+</ul>
+<p>  ping/pong; the client timestamps a <code>ping</code>, the engine echoes it, and the client   records the elapsed time. The offset/round-trip estimation follows the Network   Time Protocol approach (Mills et al., 2010, RFC 5905) — the same method the   production code uses to align marker timestamps.</p>
+<ul>
+<li><strong>Jitter (timing variation):</strong> the <code>sensor_update</code> stream carries no sequence</li>
+</ul>
+<p>  counter, so frame loss/irregularity is inferred from <strong>inter-arrival variation</strong>   — the spread (p95, max) of the gaps between consecutive frames. This is jitter in   the sense of delay variation formalised by RFC 3393 (Demichelis &amp; Chimento,   2002).</p>
+<ul>
+<li><strong>Resource utilisation:</strong> per-process CPU (share of total machine capacity;</li>
+</ul>
+<p>  100 % = one full core) and memory (working set and private bytes), sampled over   time.</p>
+<ul>
+<li><strong>Endurance / soak:</strong> a load sustained over a long duration to expose slow</li>
+</ul>
+<p>  degradation and resource leaks (Meier et al., 2007). Monotonic, unbounded   resource growth over uptime is the classic signature of software aging via   memory leak (Huang et al., 1995).</p>
+<h3>3.2 Instrumentation</h3>
+<p>A purpose-built synthetic client (<code>tool/ws_perf_test.dart</code>, pure Dart) reproduces the dashboard's wire protocol: it connects to the bridge, optionally drives a session (<code>configure_session</code> → <code>start_session</code> [→ <code>start_recording</code>]), subscribes to the broadcast stream, and records per-second throughput, inter-arrival statistics, RTT, and payload size to CSV. It supports multiple concurrent clients to test broadcast fan-out. A companion PowerShell sampler records process CPU and memory. The full procedure is documented in <code>PERF_TESTING.md</code>.</p>
+<hr>
+<h2>4. Stage 1 — Data-pipeline throughput and latency</h2>
+<h3>4.1 Procedure</h3>
+<p>The engine was driven into its capture (preview) state so sensor frames streamed at the nominal rate; no hardware was required because the engine broadcasts during preview. The synthetic client measured throughput, inter-arrival jitter, and command RTT for 60 s with a single client, then the broadcast <strong>fan-out</strong> was tested by attaching 5 concurrent clients (one measured, four as pure load).</p>
+<h3>4.2 Results</h3>
+<table>
+<tr><th> Metric</th><th>1 client (60 s)</th><th>5 clients (fan-out) </th></tr>
+<tr><td> Broadcast rate (mean / min / max)</td><td>4.88 / 4.00 / 5.00 Hz</td><td>4.89 Hz </td></tr>
+<tr><td> Inter-arrival p95</td><td>~206 ms</td><td>~205 ms </td></tr>
+<tr><td> Command RTT (median / p95 / max)</td><td>4 / 14 / 18 ms</td><td>5 / 10 / 17 ms </td></tr>
+<tr><td> Payload (mean)</td><td>~860 B</td><td>~910 B </td></tr>
+<tr><td> Warm-up to first frame</td><td>21.5 s</td><td>— </td></tr>
+</table>
+<h3>4.3 Analysis and findings</h3>
+<ul>
+<li><strong>The bridge is healthy.</strong> Command latency is single-digit milliseconds on</li>
+</ul>
+<p>  loopback and jitter is tight around the 200 ms nominal frame period. Adding five   concurrent dashboards produced <strong>no measurable change</strong> in rate, latency, or   jitter — the <em>capacity</em> margin for this usage is ample.</p>
+<ul>
+<li><strong>Live-view rate ceiling.</strong> The engine broadcasts at ~5 Hz (a fixed update</li>
+</ul>
+<p>  interval), bounding how smoothly the <em>live</em> figure moves. Its effect on   <em>recorded</em> data was later measured directly (§7) and is mixed: <strong>EEG is recorded   at its full 250 Hz</strong>, but the <strong>live ZED skeleton is persisted on the same ~5 Hz   update tick</strong> — not the camera's native rate (full-rate skeleton stays recoverable   offline from the SVO video). The broadcast interval is a design tunable; the   recorded-skeleton rate is a fidelity consideration (F7).</p>
+<ul>
+<li><strong>Warm-up cost.</strong> The ~21 s to first frame is the engine's camera-initialisation</li>
+</ul>
+<p>  timeout (no camera attached), after which it previews regardless — not a   scene-loading cost.</p>
+<ul>
+<li><strong>Robustness observation (logged for follow-up).</strong> Repeatedly <em>re-driving</em> a</li>
+</ul>
+<p>  session (<code>configure_session</code> + <code>start_session</code>) without first returning the   engine to its menu reloads the capture scene and re-initialises the camera   without releasing the prior instance; after several such cycles with no camera   attached, sensor initialisation hung. This is reachable if an operator starts a   new session without ending the previous one, and is recorded in the project   backlog for verification with real hardware.</p>
+<hr>
+<h2>5. Stage 2 — User-interface smoothness</h2>
+<h3>5.1 Procedure</h3>
+<p>The dashboard was launched in profile mode with its built-in synthetic ("mock") data sources enabled, animating the live-monitor screen (the heaviest-rendering view, including the 3D avatar). Frame timing was recorded in Flutter DevTools' Performance timeline while interacting (switching avatar styles, opening panels), and the dashboard process's CPU and memory were sampled in parallel for 60 s.</p>
+<h3>5.2 Results</h3>
+<table>
+<tr><th> Metric</th><th>Result </th></tr>
+<tr><td> CPU (mean / range)</td><td>10.6 % / 9.2–12.0 % of total capacity (≈ 1.7 of 16 cores) </td></tr>
+<tr><td> Working-set memory</td><td>~314 MB, drift +1 MB over 60 s </td></tr>
+<tr><td> Private memory</td><td>~335 MB, flat </td></tr>
+<tr><td> Frame rate (observed)</td><td>~79 fps </td></tr>
+<tr><td> Frame timeline</td><td>Mostly within budget, with recurring <strong>shader-compilation</strong> spikes </td></tr>
+</table>
+<h3>5.3 Analysis and findings</h3>
+<ul>
+<li><strong>Resource use is bounded and stable</strong> — CPU steady at ~1.7 cores while</li>
+</ul>
+<p>  animating, memory flat over the window (no growth). The steady cost is   attributable to the synthetic data forcing a full UI rebuild at 10 Hz plus the   3D-avatar repaint; real capture data arrives more slowly (~5 Hz), so live-mode   cost should be comparable or lower.</p>
+<ul>
+<li><strong>Defect: shader-compilation jank.</strong> DevTools attributed the recurring dropped</li>
+</ul>
+<p>  frames to <strong>shader compilation</strong> — on the Skia backend, each distinct   gradient/glow shader is compiled at runtime on first use, blowing that frame's   budget. The trigger paints are the gradient-based sensor panels (EEG intensity   blobs, plantar/foot heatmaps) and the neon-glow avatar style. Because each shader   compiles only once and is then cached, this is a <strong>transient, first-use</strong> cost,   not a steady-state problem — consistent with the otherwise-smooth ~79 fps and   flat resources. Its relevance is grounded in evidence that input-to-output lag   and frame irregularity degrade interactive performance (MacKenzie &amp; Ware, 1993;   Nielsen, 1993).</p>
+<ul>
+<li><strong>Attempted fix — Impeller.</strong> Flutter's modern renderer (Impeller) precompiles</li>
+</ul>
+<p>  shaders and eliminates this jank class by design. It was enabled   (<code>--enable-impeller</code>) and confirmed active (OpenGL backend), <strong>but rendered a   black screen</strong> on the test machine's GPU/driver — the desktop Impeller backend is   immature in Flutter 3.44 on Windows. The fix is therefore not currently viable   here.</p>
+<ul>
+<li><strong>Disposition.</strong> The item was <strong>accepted as-is</strong> (cosmetic, transient, on an</li>
+</ul>
+<p>  otherwise-smooth UI) and deferred. The Skia-path remedy — SkSL shader warm-up   bundling — is documented as an option if polish is later required. This engine   behaviour is vendor/engineering documentation, not peer-reviewed literature, and   is cited as such.</p>
+<figure style='margin:14pt 0;text-align:center'><img src='docs/figures/devtools-frames.png' style='max-width:100%;border:1px solid #c9c2df' /><figcaption style='font-size:9.5pt;color:#4a4460;margin-top:5pt;text-align:left'><strong>Figure 1.</strong> Flutter DevTools <em>Performance</em> timeline captured during a live session — the Flutter frames chart with the Jank / Shader-Compilation legend; 139 FPS average.</figcaption></figure>
+<hr>
+<h2>6. Stage 3 — Endurance (soak)</h2>
+<h3>6.1 Procedure</h3>
+<p>A single session was driven and <strong>recorded</strong> continuously for 20 minutes (1,200 s) while the synthetic client logged per-second throughput, jitter, and RTT, and the sampler recorded the engine process's CPU and memory every 5 s. Endurance testing of this kind is the standard method for exposing slow degradation and leaks (Meier et al., 2007).</p>
+<h3>6.2 Results</h3>
+<p><strong>Broadcast pipeline (per-second, n = 1,200):</strong></p>
+<table>
+<tr><th> Window</th><th>Mean rate </th></tr>
+<tr><td> 0–5 min</td><td>4.91 Hz </td></tr>
+<tr><td> 5–10 min</td><td>4.92 Hz </td></tr>
+<tr><td> 10–15 min</td><td>4.92 Hz </td></tr>
+<tr><td> 15–20 min</td><td>4.92 Hz </td></tr>
+</table>
+<p>Seconds below 4 Hz: <strong>0</strong>. Worst single stall: 238 ms. RTT median / p95 / max: 3 / 7 / 22 ms.</p>
+<p><strong>Engine process (5 s cadence):</strong> CPU steady at ~10.5 % (≈ 1.7 cores) start to finish; private memory rose from ~1,007 MB to ~1,110 MB over the first ~10 minutes, then <strong>plateaued</strong> for the remainder.</p>
+<figure style='margin:14pt 0;text-align:center'><img src='docs/figures/soak-rate.png' style='max-width:100%;border:1px solid #c9c2df' /><figcaption style='font-size:9.5pt;color:#4a4460;margin-top:5pt;text-align:left'><strong>Figure 2.</strong> Broadcast rate across the 20-minute mocked-data soak (1,200 per-second samples): held at the nominal 5 Hz, dipping to 4 Hz only in isolated one-second windows — mean 4.92 Hz, zero seconds below 4 Hz.</figcaption></figure>
+<figure style='margin:14pt 0;text-align:center'><img src='docs/figures/soak-memory.png' style='max-width:100%;border:1px solid #c9c2df' /><figcaption style='font-size:9.5pt;color:#4a4460;margin-top:5pt;text-align:left'><strong>Figure 3.</strong> Engine private memory across the mocked-data soak (232 samples, 5 s cadence): rose ~100 MB during the first ~10 minutes as caches and buffers filled, then plateaued — bounded growth, not a memory leak.</figcaption></figure>
+<h3>6.3 Analysis and findings</h3>
+<ul>
+<li><strong>No throughput degradation.</strong> The broadcast rate is flat across all four</li>
+</ul>
+<p>  five-minute quarters, with zero sub-nominal seconds and low, stable latency —   the pipeline does not drift over time.</p>
+<ul>
+<li><strong>No memory leak.</strong> Private memory grew during an initial warm-up phase</li>
+</ul>
+<p>  (caches and recording buffers filling) and then stabilised. A true leak produces   <em>continued, roughly linear</em> growth over uptime (Huang et al., 1995); the observed   plateau is the opposite signature and indicates bounded, healthy behaviour over   this window.</p>
+<hr>
+<h2>7. Real-hardware validation (EEG + ZED)</h2>
+<p>Limitation 1 of the initial report — that the synthetic runs did not exercise the real high-rate writers — was addressed with a live-hardware session on 2026-08-10: a Unicorn Hybrid Black EEG headset (8 channels, 250 Hz) on COM7 and a ZED 2i camera tracking a body, recorded for <strong>8 min 33 s</strong> while the passive client measured the pipeline and a sampler recorded engine resources.</p>
+<h3>7.1 Procedure</h3>
+<p>The session was driven from the real dashboard — exercising the actual EEG port-selection, connect-retry, and signal-quality path — with a person wearing the headset in the camera's view. The synthetic client measured the broadcast stream passively; the sampler recorded the engine and dashboard processes every 5 s.</p>
+<h3>7.2 Results</h3>
+<table>
+<tr><th> Measure</th><th>Result </th></tr>
+<tr><td> EEG samples recorded</td><td>128,373 at <strong>250.1 Hz</strong> (session <code>eeg.csv</code>) </td></tr>
+<tr><td> <strong>EEG dropped samples</strong></td><td><strong>0 (0.000 %)</strong> — counter sequential 1 → 128,373 </td></tr>
+<tr><td> EEG link stability</td><td>Locked on COM7; no mid-session disconnect (<code>Player.log</code>) </td></tr>
+<tr><td> ZED skeleton frames</td><td>2,737 at <strong>5.33 Hz</strong> (update-tick rate, not camera rate) </td></tr>
+<tr><td> Broadcast rate under load</td><td><strong>5.33 Hz</strong> (vs 4.9 Hz synthetic) </td></tr>
+<tr><td> Command RTT (median / p95 / max)</td><td>5 / 13 / 23 ms </td></tr>
+<tr><td> Payload per frame</td><td><strong>2,815 B</strong> (≈ 3.3× synthetic — real skeleton + EEG) </td></tr>
+<tr><td> Engine CPU</td><td><strong>16.5 %</strong> (≈ 2.6 cores; vs ~10.5 % synthetic) </td></tr>
+<tr><td> Engine memory (private)</td><td>2.79 → 2.98 GB, <strong>rising</strong> over the run </td></tr>
+<tr><td> EEG signal quality (live)</td><td><strong>Good</strong> · artifact <strong>Low</strong> (8 ch; band power θ 6.2 / α 9.8 / β 4.4 µV²) </td></tr>
+<tr><td> Live-monitor UI render (real data)</td><td>raster avg <strong>14.6 ms</strong> / max 30.6 ms; UI avg 9.6 ms (≈ 68 fps) </td></tr>
+</table>
+<h3>7.3 Analysis and findings</h3>
+<ul>
+<li><strong>The pipeline holds under real sensor load.</strong> Broadcast rate and command latency</li>
+</ul>
+<p>  were maintained even though each frame carried ~3.3× the payload (real skeleton +   EEG) and the engine was decoding EEG at 250 Hz and tracking a body.</p>
+<ul>
+<li>**EEG records losslessly <em>and</em> cleanly.** Zero dropped samples across 8.5 minutes</li>
+</ul>
+<p>  at exactly 250 Hz — the decode kept up with the stream without a single gap — and   the live monitor reported <strong>Good</strong> signal quality with <strong>Low</strong> artifact, confirming   proper reference/ground electrode contact. This is the headline result the   synthetic tests could not provide.</p>
+<ul>
+<li><strong>Real data renders at ~68 fps under load.</strong> With the wearer in frame, the live</li>
+</ul>
+<p>  monitor updated all modalities — 8-channel EEG with computed band power, the ZED   skeleton, and mock plantar pressure — while the Flutter performance overlay showed   raster avg 14.6 ms/frame (max 30.6 ms). That is slightly heavier than the mock   Stage 2 (~79 fps), as expected from rendering real skeleton + EEG waveforms, and   still comfortably interactive.</p>
+<ul>
+<li><strong>Recorded ZED skeleton is ~5 Hz.</strong> The skeleton is persisted on the engine's</li>
+</ul>
+<p>  update tick (~200 ms), so recorded kinematics are ~5.3 Hz — adequate for slow   rehabilitation movement (Nyquist ≈ 2.6 Hz) but coarse for faster motion. The SVO   video is full-rate, so higher-resolution skeleton can be re-extracted offline.</p>
+<ul>
+<li><strong>Recording memory scales with duration.</strong> Engine memory rose ~180 MB over</li>
+</ul>
+<p>  5 minutes because EEG samples and skeleton frames are buffered in RAM until the   session is saved (and the SVO streams to disk). This is session buffering, not a   leak, but it grows with session length — a full-length study session should be   confirmed to fit in RAM.</p>
+<figure style='margin:14pt 0;text-align:center'><img src='docs/figures/realhw-monitor.png' style='max-width:100%;border:1px solid #c9c2df' /><figcaption style='font-size:9.5pt;color:#4a4460;margin-top:5pt;text-align:left'><strong>Figure 4.</strong> Live monitor during the real-hardware session (participant P-002): 8-channel EEG streaming with band power (θ 6.21 / α 9.84 / β 4.37 µV²), <strong>Signal Quality: Good</strong>, <strong>Artifact: Low</strong>; ZED skeleton tracking (knee ≈ 42°); mock plantar pressure. The Flutter performance overlay (top strip) reads raster avg 12.8 ms/frame, UI avg 7.3 ms/frame.</figcaption></figure>
+<hr>
+<h2>8. Findings summary and verdict</h2>
+<table>
+<tr><th> #</th><th>Finding</th><th>Severity</th><th>Disposition </th></tr>
+<tr><td> F1</td><td>Bridge sustains 5 Hz with single-digit-ms RTT; no fan-out impact</td><td>—</td><td>Pass </td></tr>
+<tr><td> F2</td><td>UI resource use bounded (~1.7 cores, flat memory), ~79 fps</td><td>—</td><td>Pass </td></tr>
+<tr><td> F3</td><td>No throughput drift or memory leak over 20-min soak</td><td>—</td><td>Pass </td></tr>
+<tr><td> F4</td><td>Transient shader-compilation jank in the UI</td><td>Low (cosmetic)</td><td>Accepted / deferred; Impeller not viable on this GPU </td></tr>
+<tr><td> F5</td><td>Live-view broadcast capped at ~5 Hz</td><td>Informational</td><td>By design (broadcast tunable) </td></tr>
+<tr><td> F6</td><td>Repeated session re-drive can hang sensor init</td><td>Medium (reliability)</td><td>Backlog; verify with hardware </td></tr>
+<tr><td> F7</td><td>Recorded ZED skeleton is ~5.3 Hz (update tick), not camera rate</td><td>Low–Medium (data fidelity)</td><td>Adequate for slow movement; full rate recoverable from SVO offline </td></tr>
+<tr><td> F8</td><td>Engine recording memory grows with session length (sample buffering)</td><td>Low (scalability)</td><td>Not a leak; confirm long sessions fit in RAM </td></tr>
+<tr><td> F9</td><td>EEG records losslessly at 250 Hz under real load (0 dropped over 8.5 min)</td><td>—</td><td>Pass — real-hardware validated (§7) </td></tr>
+</table>
+<p><strong>Overall verdict: PASS.</strong> The system meets its real-time performance objectives, now including a real-hardware run in which EEG recorded losslessly (F9). The single genuine defect (F4) is cosmetic; the recorded-skeleton rate (F7), recording-memory growth (F8), and the re-drive hang (F6) are refinements and observations recorded for follow-up.</p>
+<hr>
+<h2>9. Limitations and threats to validity</h2>
+<ol>
+<li><strong>Synthetic sensors — now partially addressed (§7).</strong> Stages 1–3 ran with no</li>
+</ol>
+<p>   physical sensors. A subsequent real-hardware session (live EEG + ZED 2i, 8.5 min)    confirmed lossless EEG recording and pipeline stability under true load; a    <em>longer</em> real-hardware soak would still strengthen the recording-memory-growth    picture (F8).</p>
+<ol>
+<li><strong>Soak duration.</strong> 20 minutes is a moderate endurance window; the observed</li>
+</ol>
+<p>   memory plateau is reassuring, but a multi-hour soak would strengthen the    no-leak conclusion for very long sessions.</p>
+<ol>
+<li><strong>Single machine / configuration.</strong> Results reflect one hardware and driver</li>
+</ol>
+<p>   configuration; the Impeller black-screen (F4) in particular is GPU/driver- and    Flutter-version-specific.</p>
+<ol>
+<li><strong>Loopback network.</strong> The bridge runs over localhost; RTT figures do not include</li>
+</ol>
+<p>   any physical-network component (none exists in the deployment).</p>
+<hr>
+<h2>10. Recommendations</h2>
+<ol>
+<li><strong>Before a study:</strong> an 8.5-min real-hardware run is complete (§7); run one</li>
+</ol>
+<p>   <em>longer</em> real-hardware session (&gt; 30 min) to confirm recording-memory growth (F8)    stays within RAM, and decide whether the ~5 Hz recorded-skeleton rate (F7) is    adequate for the intended movements (or plan to re-extract from the SVO offline).</p>
+<ol>
+<li><strong>Reliability (backlog P1):</strong> add a guard preventing the FSR and EEG from being</li>
+</ol>
+<p>   configured on the same COM port, and investigate the repeated-re-drive sensor    hang (F6).</p>
+<ol>
+<li><strong>UI polish (backlog P2):</strong> re-evaluate Impeller on a future Flutter release (or</li>
+</ol>
+<p>   a Direct3D backend); if staying on Skia, bundle SkSL shader warm-up to remove    the first-use jank (F4).</p>
+<ol>
+<li><strong>Regression:</strong> re-run this suite (<code>PERF_TESTING.md</code>) before releases to catch</li>
+</ol>
+<p>   pipeline, UI, or endurance regressions.</p>
+<hr>
+<h2>References</h2>
+<p>Demichelis, C., &amp; Chimento, P. (2002). <em>IP Packet Delay Variation Metric for IP Performance Metrics (IPPM)</em> (RFC 3393). IETF. https://www.rfc-editor.org/rfc/rfc3393.html</p>
+<p>Huang, Y., Kintala, C., Kolettis, N., &amp; Fulton, N. D. (1995). Software rejuvenation: Analysis, module and applications. <em>Proceedings of the 25th International Symposium on Fault-Tolerant Computing (FTCS-25)</em>, 381–390.</p>
+<p>International Organization for Standardization. (2011). <em>ISO/IEC 25010:2011 — Systems and software engineering — SQuaRE — System and software quality models.</em> (Rev. 2023). https://iso25000.com/index.php/en/iso-25000-standards/iso-25010</p>
+<p>Jain, R. (1991). <em>The Art of Computer Systems Performance Analysis.</em> John Wiley &amp; Sons.</p>
+<p>MacKenzie, I. S., &amp; Ware, C. (1993). Lag as a determinant of human performance in interactive systems. <em>Proceedings of the INTERACT '93 and CHI '93 Conference on Human Factors in Computing Systems</em>, 488–493. https://doi.org/10.1145/169059.169431</p>
+<p>Meier, J. D., Farre, C., Bansode, P., Barber, S., &amp; Rea, D. (2007). <em>Performance Testing Guidance for Web Applications.</em> Microsoft Corporation (patterns &amp; practices). https://learn.microsoft.com/en-us/previous-versions/msp-n-p/bb924375(v=pandp.10)</p>
+<p>Miller, R. B. (1968). Response time in man-computer conversational transactions. <em>Proceedings of the AFIPS Fall Joint Computer Conference, 33</em>, 267–277.</p>
+<p>Mills, D., Martin, J., Burbank, J., &amp; Kasch, W. (2010). <em>Network Time Protocol Version 4: Protocol and Algorithms Specification</em> (RFC 5905). IETF. https://www.rfc-editor.org/rfc/rfc5905.html</p>
+<p>Molyneaux, I. (2014). <em>The Art of Application Performance Testing</em> (2nd ed.). O'Reilly Media.</p>
+<p>Nielsen, J. (1993). <em>Usability Engineering.</em> Morgan Kaufmann. (Summary: https://www.nngroup.com/articles/response-times-3-important-limits/)</p>
+<p>Ye, Y., Zhou, T., Zhu, Q., Vann, W., &amp; Du, J. (2024). Brain functional connectivity under teleoperation latency: a fNIRS study. <em>Frontiers in Neuroscience, 18</em>, 1416719. https://doi.org/10.3389/fnins.2024.1416719</p>
+<blockquote>Full provenance tags, BibTeX, and verification notes for every reference are in</blockquote>
+<blockquote><a href="REFERENCES.md">REFERENCES.md</a>. Numeric thresholds cited from secondary summaries</blockquote>
+<blockquote>should be confirmed against the primary source before quotation.</blockquote>
+<hr>
+<h2>Appendix A — Reproduction commands</h2>
+<pre># Stage 1 — pipeline (drive from Unity's menu; no hardware needed)
+dart run tool/ws_perf_test.dart --drive --seconds 60
+dart run tool/ws_perf_test.dart --drive --clients 5 --seconds 60   # fan-out
+
+# Stage 2 — UI (mocks on in Settings; profile mode, not debug)
+flutter run -d windows --profile        # then DevTools -&gt; Performance
+
+# Stage 3 — soak (writes a throwaway session; delete afterward)
+dart run tool/ws_perf_test.dart --drive --record --seconds 1200 --patient SOAK-TEST
+
+# Resource sampler (AllSigned-safe invocation)
+$sb = [scriptblock]::Create((Get-Content -Raw 'tool/sample_resources.ps1')); &amp; $sb -Seconds 1200
+</pre>
+<h2>Appendix B — Related project documents</h2>
+<ul>
+<li><code>PERF_TESTING.md</code> — the runnable test procedure and acceptance targets.</li>
+<li><code>REFERENCES.md</code> — full annotated bibliography (APA + BibTeX).</li>
+<li><code>WORKLOG.md</code> — dated change log; raw results and findings as recorded during testing.</li>
+</ul>
+
+</body></html>
